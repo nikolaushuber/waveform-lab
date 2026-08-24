@@ -627,6 +627,23 @@
   .folder-pick-row .fp-info{flex:1;min-width:0;}
   .folder-pick-row .fp-name{color:var(--text);font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .folder-pick-row .fp-meta{color:var(--text-faint);font-size:11.5px;margin-top:2px;}
+  .modal-search-wrap{padding:12px 20px 0;}
+  .modal-search-wrap .folder-search{width:100%;}
+  .folder-pick-group{border-bottom:1px solid var(--line-soft);}
+  .folder-pick-group:last-child{border-bottom:none;}
+  .folder-pick-group-head{
+    display:flex;align-items:center;gap:10px;padding:10px 2px;cursor:pointer;
+  }
+  .folder-pick-group-head input[type="checkbox"]{width:16px;height:16px;accent-color:var(--phosphor);cursor:pointer;flex-shrink:0;}
+  .fp-chevron{
+    flex-shrink:0;width:10px;font-size:10px;color:var(--text-faint);
+    display:flex;align-items:center;justify-content:center;transition:transform .15s;
+  }
+  .fp-chevron.open{transform:rotate(90deg);}
+  .fp-group-name{flex:1;min-width:0;color:var(--text);font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .folder-pick-group .fp-meta{color:var(--text-faint);font-size:11.5px;flex-shrink:0;}
+  .folder-pick-nested{padding-left:26px;}
+  .folder-pick-nested .folder-pick-row{padding:8px 2px;}
 </style>
 </head>
 <body>
@@ -4231,15 +4248,30 @@
     header.appendChild(title);
     header.appendChild(closeBtn);
 
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'modal-search-wrap';
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'folder-search';
+    searchInput.placeholder = 'Search files by name…';
+    searchWrap.appendChild(searchInput);
+
     const body = document.createElement('div');
     body.className = 'modal-body';
     const checked = new Set();
-    folderLibrary.forEach(entry => {
+    const expandedGroups = new Set();
+    let groupCheckboxes = []; // {cb, memberIds} — kept in sync with `checked` after every render
+
+    function buildFileRow(entry){
       const row = document.createElement('label');
       row.className = 'folder-pick-row';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.addEventListener('change', () => { if (cb.checked) checked.add(entry.id); else checked.delete(entry.id); });
+      cb.checked = checked.has(entry.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) checked.add(entry.id); else checked.delete(entry.id);
+        syncGroupCheckboxStates();
+      });
       const info = document.createElement('div');
       info.className = 'fp-info';
       const nameDiv = document.createElement('div');
@@ -4256,8 +4288,104 @@
       info.appendChild(metaDiv);
       row.appendChild(cb);
       row.appendChild(info);
-      body.appendChild(row);
-    });
+      return row;
+    }
+
+    function syncGroupCheckboxStates(){
+      groupCheckboxes.forEach(({ cb, memberIds }) => {
+        const n = memberIds.filter(id => checked.has(id)).length;
+        cb.checked = n > 0 && n === memberIds.length;
+        cb.indeterminate = n > 0 && n < memberIds.length;
+      });
+    }
+
+    // A folder-group row: checking its box selects/deselects every file in
+    // that folder at once; clicking the name expands it to fine-tune
+    // individual files (each keeps its own checkbox).
+    function buildGroupRow(group, memberFiles){
+      const wrap = document.createElement('div');
+      wrap.className = 'folder-pick-group';
+
+      const head = document.createElement('div');
+      head.className = 'folder-pick-group-head';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.title = `Select all ${memberFiles.length} files in "${group.name}"`;
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', () => {
+        memberFiles.forEach(f => { if (cb.checked) checked.add(f.id); else checked.delete(f.id); });
+        renderPickerList();
+      });
+      groupCheckboxes.push({ cb, memberIds: memberFiles.map(f => f.id) });
+
+      const chevron = document.createElement('span');
+      chevron.className = 'fp-chevron' + (expandedGroups.has(group.id) ? ' open' : '');
+      chevron.innerHTML = '&#9656;';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'fp-group-name';
+      nameSpan.textContent = group.name;
+
+      const metaSpan = document.createElement('span');
+      metaSpan.className = 'fp-meta';
+      metaSpan.textContent = memberFiles.length + (memberFiles.length === 1 ? ' file' : ' files');
+
+      const toggleExpand = () => {
+        if (expandedGroups.has(group.id)) expandedGroups.delete(group.id);
+        else expandedGroups.add(group.id);
+        renderPickerList();
+      };
+      chevron.addEventListener('click', toggleExpand);
+      nameSpan.addEventListener('click', toggleExpand);
+
+      head.appendChild(cb);
+      head.appendChild(chevron);
+      head.appendChild(nameSpan);
+      head.appendChild(metaSpan);
+      wrap.appendChild(head);
+
+      if (expandedGroups.has(group.id)){
+        const nested = document.createElement('div');
+        nested.className = 'folder-pick-nested';
+        memberFiles.forEach(f => nested.appendChild(buildFileRow(f)));
+        wrap.appendChild(nested);
+      }
+      return wrap;
+    }
+
+    function renderPickerList(){
+      body.innerHTML = '';
+      groupCheckboxes = [];
+      const q = searchInput.value.trim().toLowerCase();
+
+      if (q){
+        const matches = folderLibrary.filter(e => e.name.toLowerCase().includes(q));
+        if (!matches.length){
+          const note = document.createElement('div');
+          note.className = 'empty-note';
+          note.textContent = 'No files match your search.';
+          body.appendChild(note);
+        } else {
+          matches.forEach(e => body.appendChild(buildFileRow(e)));
+        }
+        return;
+      }
+
+      if (folderGroups.length){
+        folderGroups.forEach(group => {
+          const members = folderLibrary.filter(f => f.folderId === group.id);
+          if (members.length) body.appendChild(buildGroupRow(group, members));
+        });
+      }
+      const loose = folderLibrary.filter(f => f.folderId == null);
+      loose.forEach(e => body.appendChild(buildFileRow(e)));
+
+      syncGroupCheckboxStates();
+    }
+
+    searchInput.addEventListener('input', renderPickerList);
+    renderPickerList();
 
     const footer = document.createElement('div');
     footer.className = 'modal-footer';
@@ -4289,6 +4417,7 @@
     footer.appendChild(addBtn);
 
     box.appendChild(header);
+    box.appendChild(searchWrap);
     box.appendChild(body);
     box.appendChild(footer);
     overlay.appendChild(box);
