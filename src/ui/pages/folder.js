@@ -23,7 +23,7 @@ export function ingestFolderFiles(fileArr, targetFolderId){
         const audioBuffer = await tmpCtx.decodeAudioData(arrayBuffer.slice(0));
         const entry = {
           id: uid(), name: file.name, size: file.size, audioBuffer,
-          skipStart:'', skipEnd:'', folderId: targetFolderId,
+          skipStart:'', skipEnd:'', taps:null, folderId: targetFolderId,
           _rawBuffer: arrayBuffer.slice(0)
         };
         S.folderLibrary.push(entry);
@@ -767,6 +767,7 @@ export async function restoreLibraries(){
         S.folderLibrary.push({
           id: rec.id, name: rec.name, size: rec.size, audioBuffer,
           skipStart: rec.skipStart || '', skipEnd: rec.skipEnd || '',
+          taps: rec.taps || null,
           folderId: rec.folderId || null,
           _rawBuffer: rec.arrayBuffer
         });

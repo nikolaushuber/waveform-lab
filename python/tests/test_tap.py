@@ -95,3 +95,37 @@ def test_crop_end_and_errors():
     assert tap.analyse_tap_samples(rec, SR, {"skipStart": "0", "skipEnd": "2"}, opts)["detectedEvents"] == 3
     with pytest.raises(tap.TapAnalysisError):
         tap.analyse_tap_samples(np.zeros(8000, np.float32), SR, {"skipStart": "0", "skipEnd": ""}, opts)
+
+
+# ---------------- detection / analysis split (tap editor) ----------------
+
+OPTS = dict(TAP_DEFAULTS, useEnergy=False)
+
+
+def test_detect_then_analyse_equals_pipeline():
+    for name, samples in recordings():
+        crop = {"skipStart": "", "skipEnd": ""}
+        found = tap.detect(samples, SR, crop, OPTS)
+        assert found["cropStartAuto"] is True and found["cropEnd"] == 0
+        via_split = tap.analyse_taps(samples, SR, found["taps"], OPTS, found["cropStart"], found["cropEnd"])
+        assert via_split == tap.analyse_tap_samples(samples, SR, crop, OPTS), name
+
+
+def test_detect_reports_manual_crop():
+    _, samples = recordings()[0]
+    found = tap.detect(samples, SR, {"skipStart": "1.0", "skipEnd": "0.5"}, OPTS)
+    assert found["cropStartAuto"] is False
+    assert found["cropStart"] == 1.0 and found["cropEnd"] == 0.5
+    assert all(1.0 <= t < len(samples) / SR - 0.5 for t in found["taps"])
+
+
+def test_analyse_taps_uses_exactly_the_given_taps():
+    _, samples = recordings()[0]
+    taps = tap.detect(samples, SR, {"skipStart": "0", "skipEnd": ""}, OPTS)["taps"]
+    assert len(taps) == 5
+    assert tap.analyse_taps(samples, SR, taps[:3], OPTS)["detectedEvents"] == 3
+    # Outside the crop (before Crop Start / after the Crop End trim) is ignored.
+    res = tap.analyse_taps(samples, SR, taps, OPTS, crop_start_sec=taps[1] - 0.01, crop_end_sec=len(samples) / SR - taps[3] + 0.01)  # keeps taps[1], taps[2]
+    assert res["detectedEvents"] == 2
+    with pytest.raises(tap.TapAnalysisError, match="no taps inside"):
+        tap.analyse_taps(samples, SR, [100.0], OPTS)

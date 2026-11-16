@@ -292,6 +292,27 @@
 
     <!-- RIGHT: RESULTS -->
     <div>
+      <div class="panel" id="tapEditorPanel">
+        <div class="panel-label">
+          <span>Recording</span>
+          <span class="te-actions">
+            <button class="text-btn" type="button" id="tapEditorResetCrop">Reset crop</button>
+            <button class="text-btn" type="button" id="tapEditorResetTaps">Reset taps</button>
+          </span>
+        </div>
+        <div class="axis-bar" style="margin-top:0;">
+          <div class="axis-group">
+            <span class="axis-label">File</span>
+            <select id="tapEditorSelect" class="smoothing-select"></select>
+          </div>
+          <span class="te-summary" id="tapEditorSummary">Load a recording on the left.</span>
+        </div>
+        <div class="screen">
+          <canvas id="tapEditorCanvas" width="1200" height="180"></canvas>
+        </div>
+        <div class="te-hint">Drag the red edges to crop · drag a tap to move it · double-click to add a tap · right-click a tap to remove it · hold Alt to place a tap exactly instead of snapping to its attack. Blue bands show each tap's analysis window.</div>
+      </div>
+
       <div class="panel">
         <div class="panel-label"><span>Frequency Scatter <span class="freq-range-label" id="tapFreqRangeLabel" style="color:var(--text-faint);">(top 5 most common frequencies per file, average % vs. Hz)</span></span></div>
         <div class="axis-bar" style="margin-top:0;">

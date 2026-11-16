@@ -1,4 +1,5 @@
 import { init as initUiPagesTap } from './ui/pages/tap.js';
+import { init as initTapRecording } from './ui/pages/tap-recording.js';
 import { init as initUiPagesCluster } from './ui/pages/cluster.js';
 import { init as initUiPagesCompare } from './ui/pages/compare.js';
 import { init as initUiPagesFolder } from './ui/pages/folder.js';
@@ -16,6 +17,7 @@ import { renderTapRows } from './ui/pages/tap.js';
 import { resetScreen } from './ui/views/spectrum.js';
 
 initUiPagesTap();
+initTapRecording();
 initUiPagesCluster();
 initUiPagesCompare();
 initUiPagesFolder();

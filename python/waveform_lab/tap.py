@@ -271,27 +271,59 @@ def common_frequencies(event_results, tolerance_hz, top_n):
 
 # ---------------- pipeline ----------------
 
-def analyse_tap_samples(samples, sr, crop, opts):
-    """Full per-file pipeline on mono samples.
+def _crop_end_sec(crop):
+    """Crop End (seconds trimmed off the end) from the UI string; 0 = none."""
+    text = (crop.get("skipEnd") or "").strip()
+    sec = js_parse_float(text) if text else 0.0
+    return sec if math.isfinite(sec) and sec > 0 else 0.0
+
+
+def _trim_end(samples, sr, crop_end_sec):
+    if crop_end_sec > 0:
+        return samples[: max(1, len(samples) - js_round(crop_end_sec * sr))]
+    return samples
+
+
+def detect(samples, sr, crop, opts):
+    """Where the analysis will look: the resolved crop and the detected taps.
 
     crop: {'skipStart', 'skipEnd'} as typed in the UI ('' = auto / none).
-    opts: {'numEvents', 'minGap', 'minFreq', 'maxFreq', 'topNBasis',
-           'tolerance', 'useEnergy'}.
-    Returns {'freqSummary', 'eventCount', 'detectedEvents'}.
+    opts: needs 'numEvents' and 'minGap'.
+    Returns {'cropStart', 'cropStartAuto', 'cropEnd', 'taps'}, all in
+    seconds from the start of the file (cropEnd = seconds cut off the end).
     """
     samples = np.asarray(samples, dtype=np.float64)
+    crop_end = _crop_end_sec(crop)
+    samples = _trim_end(samples, sr, crop_end)
 
-    # Crop End: seconds trimmed off the end of the file.
-    skip_end = (crop.get("skipEnd") or "").strip()
-    if skip_end:
-        sec = js_parse_float(skip_end)
-        if math.isfinite(sec) and sec > 0:
-            samples = samples[: max(1, len(samples) - js_round(sec * sr))]
+    text = (crop.get("skipStart") or "").strip()
+    auto = not text
+    crop_start = auto_detect_skip_start(samples, sr) if auto else js_parse_float(text)
+    if not math.isfinite(crop_start) or crop_start < 0:
+        crop_start = 0.0
 
-    skip_start = (crop.get("skipStart") or "").strip()
-    skip_start_sec = js_parse_float(skip_start) if skip_start else auto_detect_skip_start(samples, sr)
+    peaks = detect_tap_events(samples, sr, opts["numEvents"], opts["minGap"], crop_start)
+    return {
+        "cropStart": float(crop_start),
+        "cropStartAuto": auto,
+        "cropEnd": float(crop_end),
+        "taps": [p / sr for p in peaks],
+    }
 
-    peaks = detect_tap_events(samples, sr, opts["numEvents"], opts["minGap"], skip_start_sec)
+
+def analyse_taps(samples, sr, taps_sec, opts, crop_start_sec=0.0, crop_end_sec=0.0):
+    """FFT each tap, normalise its peaks and group them across taps.
+
+    taps_sec: tap positions in seconds (detected or hand-edited); taps
+    before crop_start_sec or past the Crop End trim are ignored.
+    opts: {'minFreq', 'maxFreq', 'topNBasis', 'tolerance', 'useEnergy'}.
+    Returns {'freqSummary', 'eventCount', 'detectedEvents'}.
+    """
+    samples = _trim_end(np.asarray(samples, dtype=np.float64), sr, crop_end_sec)
+    start = js_round(max(0.0, crop_start_sec) * sr)
+    peaks = sorted(i for i in (js_round(t * sr) for t in taps_sec) if start <= i < len(samples))
+    if not peaks:
+        raise TapAnalysisError("no taps inside the cropped range")
 
     events = []
     for i, p in enumerate(peaks):
@@ -318,3 +350,14 @@ def analyse_tap_samples(samples, sr, crop, opts):
         "eventCount": len(events),
         "detectedEvents": len(peaks),
     }
+
+
+def analyse_tap_samples(samples, sr, crop, opts):
+    """Full per-file pipeline on mono samples: detect, then analyse_taps.
+
+    crop: {'skipStart', 'skipEnd'} as typed in the UI ('' = auto / none).
+    opts: {'numEvents', 'minGap', 'minFreq', 'maxFreq', 'topNBasis',
+           'tolerance', 'useEnergy'}.
+    """
+    found = detect(samples, sr, crop, opts)
+    return analyse_taps(samples, sr, found["taps"], opts, found["cropStart"], found["cropEnd"])

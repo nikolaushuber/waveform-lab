@@ -159,3 +159,25 @@ export function computeFftMagExact(windowed, sr){
   }
   return { freqs, mags, M };
 }
+
+// Where a tap's attack is, given a rough position: the loudest (mono-mixed)
+// sample from 10 ms before to 30 ms after `timeSec` — the same window the
+// Tap Analyser's detection uses (detect_tap_events in python/waveform_lab/tap.py).
+// Returns seconds.
+export function snapToAttack(audioBuffer, timeSec){
+  const sr = audioBuffer.sampleRate;
+  const n = audioBuffer.length;
+  const chans = [];
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) chans.push(audioBuffer.getChannelData(c));
+  const p = Math.min(n - 1, Math.max(0, Math.round(timeSec * sr)));
+  const lo = Math.max(0, p - Math.round(0.01 * sr));
+  const hi = Math.min(n, p + Math.round(0.03 * sr));
+  let best = p, bestV = -Infinity;
+  for (let i = lo; i < hi; i++){
+    let sum = 0;
+    for (const ch of chans) sum += ch[i];
+    const v = Math.abs(sum / chans.length);
+    if (v > bestV){ bestV = v; best = i; }
+  }
+  return best / sr;
+}

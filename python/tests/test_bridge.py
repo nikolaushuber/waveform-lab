@@ -27,3 +27,13 @@ def test_run_clustering_round_trip():
     res = json.loads(bridge.run_clustering(json.dumps(payload), [s for _, s in recs]))
     assert res["k"] == 2
     assert adjusted_rand_score(res["rfLabels"], load_golden("clustering-py")["rfLabels"]) == 1.0
+
+
+def test_tap_detection_then_analysis_with_edited_taps():
+    _, samples = recordings()[0]
+    base = {"sr": SR, "skipStart": "0", "skipEnd": "", "opts": dict(TAP_DEFAULTS, useEnergy=False)}
+    found = json.loads(bridge.run_tap_detection(json.dumps(base), [samples]))
+    assert found["cropStartAuto"] is False and len(found["taps"]) == 5
+    edited = dict(base, taps=found["taps"][1:], cropStart=found["cropStart"], cropEnd=found["cropEnd"])
+    res = json.loads(bridge.run_tap_analysis(json.dumps(edited), [samples]))
+    assert res["detectedEvents"] == 4
