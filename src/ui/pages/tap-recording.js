@@ -10,12 +10,17 @@ import { S } from '../state.js';
 import { toMono } from '../../core/mono.js';
 import { snapToAttack } from '../../core/spectrum.js';
 import { callPython } from '../../engines/python.js';
+import { createPlayer } from '../../platform/audio-player.js';
 import { el } from '../dom.js';
 import { syncEntryToFolder } from '../folder-store.js';
+import { fmtTime } from '../format.js';
 import { createTapEditor } from '../views/tap-editor.js';
 import { renderTapRows } from './tap.js';
 
 let editor = null;
+let player = null;
+let playingId = null;   // entry whose position the player holds
+let ticker = null;
 const timers = new WeakMap();
 const versions = new WeakMap();
 
@@ -82,6 +87,11 @@ export function requestDetection(entry, delay = 150){
   }, delay));
 }
 
+// One-line state for a file's row in the left-hand list.
+export function tapRowSummary(entry){
+  return summary(entry).replace('Crop start: ', 'crop ');
+}
+
 function summary(entry){
   const v = tapView(entry);
   if (v.error) return `Detection failed: ${v.error}`;
@@ -114,9 +124,59 @@ export function refreshTapEditor(){
   if (entry) select.value = entry.id;
 
   el('tapEditorSummary').textContent = entry ? summary(entry) : 'Load a recording on the left.';
+  for (const [id, key] of [['tapCropStart', 'skipStart'], ['tapCropEnd', 'skipEnd']]){
+    const input = el(id);
+    input.disabled = !entry;
+    if (document.activeElement !== input) input.value = entry ? entry[key] || '' : '';
+  }
+  if (playingId !== (entry && entry.id)) resetPlayback(entry);
+  el('tapPlayBtn').disabled = !entry;
+  el('tapDurTime').textContent = fmtTime(entry ? entry.audioBuffer.duration : 0);
   el('tapEditorResetCrop').disabled = !entry || ((entry.skipStart || '') === '' && (entry.skipEnd || '') === '');
   el('tapEditorResetTaps').disabled = !entry || entry.taps == null;
   editor.show(entry ? tapView(entry) : null);
+}
+
+// ---------------- playback ----------------
+function showPosition(t){
+  el('tapCurTime').textContent = fmtTime(t);
+  editor.setPlayhead(t);
+}
+
+function stopTicker(){ cancelAnimationFrame(ticker); ticker = null; }
+
+function tick(){
+  showPosition(player.position());
+  ticker = player.playing ? requestAnimationFrame(tick) : null;
+}
+
+function updatePlayButton(){
+  el('tapPlayBtn').innerHTML = player.playing ? '&#10074;&#10074;' : '&#9658;';
+}
+
+// A different file was selected (or none): stop and rewind.
+function resetPlayback(entry){
+  player.stop();
+  stopTicker();
+  playingId = entry ? entry.id : null;
+  updatePlayButton();
+  showPosition(0);
+}
+
+function togglePlay(){
+  const entry = selectedTapEntry();
+  if (!entry) return;
+  if (player.playing){
+    player.pause();
+    stopTicker();
+    showPosition(player.position());
+  } else {
+    const dur = entry.audioBuffer.duration;
+    const from = player.position() >= dur - 0.01 ? 0 : player.position();
+    player.play(entry.audioBuffer, from);
+    tick();
+  }
+  updatePlayButton();
 }
 
 function changed(entry, redetect){
@@ -126,7 +186,16 @@ function changed(entry, redetect){
 }
 
 export function init(){
+  player = createPlayer({ onEnded: () => { stopTicker(); updatePlayButton(); showPosition(player.position()); } });
+  el('tapPlayBtn').addEventListener('click', togglePlay);
+
   editor = createTapEditor(el('tapEditorCanvas'), {
+    onSeek: (t) => {
+      const entry = selectedTapEntry();
+      if (!entry) return;
+      player.seek(entry.audioBuffer, t);
+      showPosition(t);
+    },
     onCropChange: ({ cropStart, cropEnd }) => {
       const entry = selectedTapEntry();
       if (!entry) return;
@@ -147,6 +216,14 @@ export function init(){
   });
 
   el('tapEditorSelect').addEventListener('change', (e) => selectTapEntry(e.target.value));
+  for (const [id, key] of [['tapCropStart', 'skipStart'], ['tapCropEnd', 'skipEnd']]){
+    el(id).addEventListener('change', (e) => {
+      const entry = selectedTapEntry();
+      if (!entry) return;
+      entry[key] = e.target.value;
+      changed(entry, true);
+    });
+  }
   el('tapEditorResetCrop').addEventListener('click', () => {
     const entry = selectedTapEntry();
     if (!entry) return;

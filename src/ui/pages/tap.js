@@ -2,10 +2,8 @@ import { S } from '../state.js';
 import { toMono } from '../../core/mono.js';
 import { callPython, waitForPython } from '../../engines/python.js';
 import { dropzoneTap, el, fileInputTap, runTapBtn, scatterCanvas, scatterLegend, scatterTooltip, tapFileCount, tapFreqRangeLabel, tapMetricNote, tapMetricSelect, tapResultsBody, tapRows, tapStatus, tapTopNSelect } from '../dom.js';
-import { syncEntryToFolder } from '../folder-store.js';
 import { sortByName, uid } from '../format.js';
-import { drawWaveformOverview } from '../views/waveform.js';
-import { refreshTapEditor, requestDetection, selectTapEntry, tapsForAnalysis, tapView } from './tap-recording.js';
+import { refreshTapEditor, requestDetection, selectTapEntry, tapRowSummary, tapsForAnalysis } from './tap-recording.js';
 export const TAP_METRIC_NOTES = {
   magnitude: 'Peaks are found and normalised by linear FFT magnitude — the original behaviour.',
   energy: 'Peaks are ranked by normalised energy (energy ÷ −3dB bandwidth) — rewards sharp, well-defined resonances over broad, diffuse ones of equal energy (multi_energy.py).',
@@ -45,26 +43,6 @@ export function addTapFiles(fileArr){
   });
 }
 
-// Row thumbnail: waveform, cropped regions (hatched-looking lighter fill
-// when the crop start is automatic) and a tick per tap.
-export function drawTapRowWave(canvas, entry){
-  drawWaveformOverview(canvas, entry.audioBuffer);
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  const dur = entry.audioBuffer.duration || 1;
-  const v = tapView(entry);
-  const xs = Math.min(w, (v.cropStart/dur)*w);
-  const xe = Math.max(0, ((dur - v.cropEnd)/dur)*w);
-  ctx.fillStyle = v.cropStartAuto ? 'rgba(194,59,46,0.09)' : 'rgba(194,59,46,0.16)';
-  if (xs > 0) ctx.fillRect(0, 0, xs, h);
-  ctx.fillStyle = 'rgba(194,59,46,0.16)';
-  if (xe < w) ctx.fillRect(xe, 0, w - xe, h);
-  v.taps.forEach(t => {
-    const x = (t/dur)*w;
-    ctx.fillStyle = x >= xs && x < xe ? '#b5690a' : '#b4b4ad';
-    ctx.fillRect(x - 1, 0, 2, 9);
-  });
-}
 
 export function renderTapRows(){
   const selectedCount = S.tapLibrary.filter(e => e.included !== false).length;
@@ -122,53 +100,18 @@ export function renderTapRows(){
     head.appendChild(nameEl);
     head.appendChild(removeBtn);
 
-    const canvas = document.createElement('canvas');
-    canvas.className = 'tr-wave';
-    canvas.width = 1200; canvas.height = 70;
-
-    const fields = document.createElement('div');
-    fields.className = 'tr-fields';
-
-    const ssField = document.createElement('div');
-    ssField.className = 'tap-field';
-    ssField.innerHTML = '<label>Crop Start (s)</label>';
-    const ssInput = document.createElement('input');
-    ssInput.type = 'number'; ssInput.min = '0'; ssInput.step = '0.1'; ssInput.placeholder = 'auto';
-    ssInput.value = entry.skipStart;
-    ssInput.addEventListener('change', () => { entry.skipStart = ssInput.value; cropTyped(entry, canvas); });
-    ssField.appendChild(ssInput);
-
-    const seField = document.createElement('div');
-    seField.className = 'tap-field';
-    seField.innerHTML = '<label>Crop End (s)</label>';
-    const seInput = document.createElement('input');
-    seInput.type = 'number'; seInput.min = '0'; seInput.step = '0.1'; seInput.placeholder = 'none';
-    seInput.value = entry.skipEnd;
-    seInput.addEventListener('change', () => { entry.skipEnd = seInput.value; cropTyped(entry, canvas); });
-    seField.appendChild(seInput);
-
-    fields.appendChild(ssField);
-    fields.appendChild(seField);
+    const meta = document.createElement('div');
+    meta.className = 'tr-meta';
+    meta.textContent = tapRowSummary(entry);
 
     row.appendChild(head);
-    row.appendChild(canvas);
-    row.appendChild(fields);
+    row.appendChild(meta);
     tapRows.appendChild(row);
-
-    drawTapRowWave(canvas, entry);
   });
   tapRows.scrollTop = scrollTop;
   refreshTapEditor();
 }
 
-// A crop typed into a row's input: save it, re-detect (unless the taps were
-// edited by hand) and redraw — without rebuilding the row being typed in.
-function cropTyped(entry, canvas){
-  syncEntryToFolder(entry, 'skipStart', 'skipEnd');
-  if (entry.taps == null) requestDetection(entry);
-  drawTapRowWave(canvas, entry);
-  refreshTapEditor();
-}
 
 export async function runTapAnalysis(){
   if (tapRunning) return;

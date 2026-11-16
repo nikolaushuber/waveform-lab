@@ -255,7 +255,7 @@
           <input type="file" id="fileInputTap" accept=".wav,audio/wav,audio/x-wav" multiple>
         </label>
         <button class="folder-load-btn" type="button" id="loadFromFolderBtnTap">Load from local folder</button>
-        <div class="empty-note" style="margin-bottom:10px;">Leave Crop Start blank to auto-detect the end of any leading speech. Crop End trims that many seconds off the end of the file (use it to cut trailing noise).</div>
+        <div class="empty-note" style="margin-bottom:10px;">Click a recording to view, play and edit its crop and taps in the Recording panel. A blank Crop Start auto-detects the end of any leading speech.</div>
         <div class="tap-rows" id="tapRows">
           <div class="empty-note">No files yet.</div>
         </div>
@@ -305,12 +305,26 @@
             <span class="axis-label">File</span>
             <select id="tapEditorSelect" class="smoothing-select"></select>
           </div>
+          <div class="axis-group">
+            <span class="axis-label">Crop start</span>
+            <input type="number" id="tapCropStart" class="freq-min-input" min="0" step="0.1" placeholder="auto" title="Seconds cut off the start. Leave blank to auto-detect the end of any leading speech.">
+            <span>s</span>
+          </div>
+          <div class="axis-group">
+            <span class="axis-label">Crop end</span>
+            <input type="number" id="tapCropEnd" class="freq-min-input" min="0" step="0.1" placeholder="none" title="Seconds cut off the end (e.g. trailing noise). Blank = none.">
+            <span>s</span>
+          </div>
+        </div>
+        <div class="transport te-transport">
+          <button class="ctrl" id="tapPlayBtn" disabled title="Play / Pause">&#9658;</button>
+          <div class="time-readout"><b id="tapCurTime">0:00.000</b> / <span id="tapDurTime">0:00.000</span></div>
           <span class="te-summary" id="tapEditorSummary">Load a recording on the left.</span>
         </div>
         <div class="screen">
           <canvas id="tapEditorCanvas" width="1200" height="180"></canvas>
         </div>
-        <div class="te-hint">Drag the red edges to crop · drag a tap to move it · double-click to add a tap · right-click a tap to remove it · hold Alt to place a tap exactly instead of snapping to its attack. Blue bands show each tap's analysis window.</div>
+        <div class="te-hint">Click to move the playhead · drag the red edges to crop · drag a tap to move it · double-click to add a tap · right-click a tap to remove it · hold Alt to place a tap exactly instead of snapping to its attack. Blue bands show each tap's analysis window.</div>
       </div>
 
       <div class="panel">

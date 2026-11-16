@@ -106,6 +106,6 @@ test('file folder: crop settings persist across reloads and load into the Tap An
   await page.locator('.folder-pick-row', { hasText: 'kept.wav' }).locator('input[type="checkbox"]').check();
   await page.locator('.modal-footer button', { hasText: 'Add selected' }).click();
   await expect(page.locator('#tapFileCount')).toContainText('1 loaded');
-  await expect(page.locator('#tapRows .tr-fields input[type="number"]').first()).toHaveValue('0.4');
+  await expect(page.locator('#tapCropStart')).toHaveValue('0.4');
   expect(errors).toEqual([]);
 });

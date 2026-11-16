@@ -10,6 +10,10 @@ import { drawWaveformOverview } from './waveform.js';
 //   onCropChange({ cropStart } | { cropEnd })   after a crop edge is dropped
 //   onTapsChange(taps)                          after a tap is moved, added or removed
 //   snap(timeSec) -> timeSec                    where a dropped tap should land (Alt skips it)
+//   onSeek(timeSec)                             a click on empty space (moves the playhead)
+//
+// setPlayhead(timeSec | null) redraws just the playhead position; the
+// waveform itself is drawn once per file into an offscreen canvas.
 
 // Each tap's FFT window, as in analyse_taps (python/waveform_lab/tap.py).
 const WINDOW_OFFSET = 0.1, WINDOW_LENGTH = 1.0;
@@ -25,8 +29,10 @@ const COLORS = {
   label: '#6b6b64',
 };
 
-export function createTapEditor(canvas, { onCropChange, onTapsChange, snap }){
+export function createTapEditor(canvas, { onCropChange, onTapsChange, snap, onSeek }){
   let view = null;
+  let playhead = null;
+  let base = null;   // { audioBuffer, w, h, canvas } — cached waveform
   let drag = null;   // { kind: 'start' | 'end' | 'tap', index, time }
   let hover = null;
 
@@ -87,7 +93,14 @@ export function createTapEditor(canvas, { onCropChange, onTapsChange, snap }){
       delete canvas.dataset.cropStart;
       return;
     }
-    drawWaveformOverview(canvas, view.audioBuffer, undefined, dur());
+    if (!base || base.audioBuffer !== view.audioBuffer || base.w !== w || base.h !== h){
+      const off = document.createElement('canvas');
+      off.width = w; off.height = h;
+      drawWaveformOverview(off, view.audioBuffer, undefined, dur());
+      base = { audioBuffer: view.audioBuffer, w, h, canvas: off };
+    }
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(base.canvas, 0, 0);
 
     const cs = cropStartT(), ce = cropEndT();
     const xs = toX(cs), xe = toX(ce);
@@ -128,6 +141,12 @@ export function createTapEditor(canvas, { onCropChange, onTapsChange, snap }){
       ctx.fillText(msg, w - ctx.measureText(msg).width - 10, 16);
     }
 
+    if (playhead != null){
+      const x = toX(playhead);
+      ctx.fillStyle = '#111';
+      ctx.fillRect(x - 1, 0, 2, h);
+    }
+
     canvas.dataset.tapCount = String(view.taps.filter((t) => t >= view.cropStart && t < dur() - view.cropEnd).length);
     canvas.dataset.cropStart = view.cropStart.toFixed(3);
   }
@@ -135,7 +154,7 @@ export function createTapEditor(canvas, { onCropChange, onTapsChange, snap }){
   canvas.addEventListener('pointerdown', (e) => {
     if (!view || e.button !== 0) return;
     const target = hit(eventX(e));
-    if (!target) return;
+    if (!target){ if (onSeek) onSeek(toT(eventX(e))); return; }
     const time = target.kind === 'tap' ? view.taps[target.index] : target.kind === 'start' ? view.cropStart : dur() - view.cropEnd;
     drag = { ...target, time };
     canvas.setPointerCapture(e.pointerId);
@@ -155,7 +174,7 @@ export function createTapEditor(canvas, { onCropChange, onTapsChange, snap }){
     }
     const h = hit(x);
     if ((h && h.kind) !== (hover && hover.kind) || (h && h.index) !== (hover && hover.index)){ hover = h; redraw(); }
-    canvas.style.cursor = h ? 'ew-resize' : 'copy';
+    canvas.style.cursor = h ? 'ew-resize' : 'text';
   });
 
   canvas.addEventListener('pointerup', (e) => {
@@ -192,6 +211,7 @@ export function createTapEditor(canvas, { onCropChange, onTapsChange, snap }){
 
   return {
     show(next){ view = next; drag = null; redraw(); },
+    setPlayhead(t){ playhead = t; redraw(); },
     redraw,
   };
 }

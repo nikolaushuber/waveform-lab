@@ -42,7 +42,8 @@ test('tap editor: drag the crop, add/remove taps, analyse exactly what is shown'
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 8 });
   await page.mouse.up();
-  await expect(page.locator('#tapRows .tr-fields input[type="number"]').first()).toHaveValue('0.05');
+  await expect(page.locator('#tapCropStart')).toHaveValue('0.05');
+  await expect(page.locator('#tapRows .tr-meta')).toContainText('crop 0.05 s');
   await expect(summary).toContainText('Crop start: 0.05 s');
   await expect(ed.canvas).toHaveAttribute('data-tap-count', '5', { timeout: 60_000 });
 
@@ -67,6 +68,38 @@ test('tap editor: drag the crop, add/remove taps, analyse exactly what is shown'
   await waitDetected(page);
   await expect(summary).not.toContainText('(edited)');
   await expect(ed.canvas).toHaveAttribute('data-tap-count', '5');
+  expect(errors).toEqual([]);
+});
+
+test('tap editor: typed crop, click-to-seek and playback', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors = await openApp(page);
+  await gotoTab(page, 'tap');
+  await page.locator('#fileInputTap').setInputFiles(wavFile('a1.wav', A1.samples));
+  await waitDetected(page);
+  await expect(page.locator('#tapRows canvas')).toHaveCount(0); // no more row thumbnails
+  const ed = await editor(page);
+
+  // Typing a crop in the panel behaves like dragging the edge.
+  await page.locator('#tapCropStart').fill('2');
+  await page.locator('#tapCropStart').press('Enter');
+  await expect(ed.canvas).toHaveAttribute('data-crop-start', '2.000');
+  await expect(page.locator('#tapEditorSummary')).toContainText('Crop start: 2.00 s');
+  await expect(ed.canvas).toHaveAttribute('data-tap-count', '3', { timeout: 60_000 });
+  await page.locator('#tapEditorResetCrop').click();
+  await expect(page.locator('#tapCropStart')).toHaveValue('');
+
+  // Clicking empty space moves the playhead; play advances it, pause stops it.
+  await expect(page.locator('#tapDurTime')).toHaveText('0:05.000');
+  const spot = ed.at(2.0, 0.8);
+  await page.mouse.click(spot.x, spot.y);
+  await expect(page.locator('#tapCurTime')).toHaveText(/^0:0(1\.9|2\.0)/);
+  await page.locator('#tapPlayBtn').click();
+  await expect.poll(async () => parseFloat((await page.locator('#tapCurTime').innerText()).split(':')[1])).toBeGreaterThan(2.2);
+  await page.locator('#tapPlayBtn').click();
+  const paused = await page.locator('#tapCurTime').innerText();
+  await page.waitForTimeout(300);
+  await expect(page.locator('#tapCurTime')).toHaveText(paused);
   expect(errors).toEqual([]);
 });
 
