@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { loadLegacy } from '../helpers/load-legacy.js';
+import { bluesteinDFT, fftInPlace, ifftInPlace, rfftMag } from '../../src/core/fft.js';
+import { computeFftMagExact } from '../../src/core/tap/peaks.js';
 import { seededRandom, sine } from '../helpers/signals.js';
 
-const wl = loadLegacy();
 
 function naiveDft(re, im, inverse = false) {
   const n = re.length, sign = inverse ? 1 : -1;
@@ -35,7 +35,7 @@ describe('fftInPlace / ifftInPlace', () => {
     const x = randomComplex(n, n);
     const want = naiveDft(x.re, x.im);
     const re = x.re.slice(), im = x.im.slice();
-    wl.fftInPlace(re, im);
+    fftInPlace(re, im);
     expectClose(re, want.re);
     expectClose(im, want.im);
   });
@@ -43,8 +43,8 @@ describe('fftInPlace / ifftInPlace', () => {
   it('ifft(fft(x)) returns x', () => {
     const x = randomComplex(512, 7);
     const re = x.re.slice(), im = x.im.slice();
-    wl.fftInPlace(re, im);
-    wl.ifftInPlace(re, im);
+    fftInPlace(re, im);
+    ifftInPlace(re, im);
     expectClose(re, x.re);
     expectClose(im, x.im);
   });
@@ -53,7 +53,7 @@ describe('fftInPlace / ifftInPlace', () => {
 describe('bluesteinDFT', () => {
   it.each([3, 5, 12, 100, 257])('matches a naive DFT for non-power-of-two n=%i', (n) => {
     const x = randomComplex(n, n);
-    const got = wl.bluesteinDFT(x.re, x.im, false);
+    const got = bluesteinDFT(x.re, x.im, false);
     const want = naiveDft(x.re, x.im);
     expectClose(got.re, want.re, 1e-8);
     expectClose(got.im, want.im, 1e-8);
@@ -61,7 +61,7 @@ describe('bluesteinDFT', () => {
 
   it.each([7, 64, 100])('inverse matches a naive inverse DFT for n=%i', (n) => {
     const x = randomComplex(n, n + 1);
-    const got = wl.bluesteinDFT(x.re, x.im, true);
+    const got = bluesteinDFT(x.re, x.im, true);
     const want = naiveDft(x.re, x.im, true);
     expectClose(got.re, want.re, 1e-10);
     expectClose(got.im, want.im, 1e-10);
@@ -70,7 +70,7 @@ describe('bluesteinDFT', () => {
   it('does not modify its inputs', () => {
     const x = randomComplex(10, 3);
     const copy = { re: x.re.slice(), im: x.im.slice() };
-    wl.bluesteinDFT(x.re, x.im, false);
+    bluesteinDFT(x.re, x.im, false);
     expect(x).toEqual(copy);
   });
 });
@@ -78,7 +78,7 @@ describe('bluesteinDFT', () => {
 describe('rfftMag', () => {
   it('has floor(n/2)+1 bins and peaks at a bin-centred sine', () => {
     const n = 1000, sr = 1000;
-    const mag = wl.rfftMag(sine(50, sr, n, 2));
+    const mag = rfftMag(sine(50, sr, n, 2));
     expect(mag.length).toBe(501);
     const peak = mag.indexOf(Math.max(...mag));
     expect(peak).toBe(50);
@@ -89,7 +89,7 @@ describe('rfftMag', () => {
 describe('computeFftMagExact', () => {
   it('returns single-sided amplitudes on the np.fft.rfftfreq grid', () => {
     const sr = 1000, n = 1000;
-    const { freqs, mags, M } = wl.computeFftMagExact(sine(100, sr, n, 0.8), sr);
+    const { freqs, mags, M } = computeFftMagExact(sine(100, sr, n, 0.8), sr);
     expect(M).toBe(n);
     expect(freqs.length).toBe(501);
     expect(freqs[1]).toBeCloseTo(1, 12);

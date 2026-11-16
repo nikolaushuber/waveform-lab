@@ -14,7 +14,7 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'npm run serve',
+    command: 'npm run build && npm run preview',
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
   },

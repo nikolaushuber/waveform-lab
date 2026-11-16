@@ -5,11 +5,15 @@
 //
 // Regenerate deliberately with:  npm test -- -u
 import { describe, it, expect } from 'vitest';
-import { loadLegacy } from '../helpers/load-legacy.js';
+import { detectTapsRF, estimateNoiseSpectrumRF, extractWindowRF, fftFeaturesRF, getBinEdgesRF, trimSignalRF } from '../../src/core/cluster/features.js';
+import { rfProximityClustering } from '../../src/core/ml/forest.js';
+import { kmeansClusterAutoK } from '../../src/core/ml/kmeans.js';
+import { adjustedRandScore } from '../../src/core/ml/metrics.js';
+import { computeSpectrumAt } from '../../src/core/spectrum.js';
+import { analyseTapFile } from '../../src/core/tap/analyse.js';
 import { fakeAudioBuffer, toGolden } from '../helpers/signals.js';
 import { SR, recordings, TAP_DEFAULTS, CLUSTER_DEFAULTS, chord } from '../helpers/fixtures.js';
 
-const wl = loadLegacy();
 const golden = (name) => `../golden/${name}.json`;
 const asJson = (v) => JSON.stringify(toGolden(v), null, 1) + '\n';
 
@@ -18,7 +22,7 @@ describe('golden: Tap Analyser', () => {
     const out = {};
     for (const r of recordings) {
       const entry = { name: r.name, audioBuffer: fakeAudioBuffer(r.samples, SR), skipStart: '', skipEnd: '' };
-      out[r.name] = await wl.analyseTapFile(entry, { ...TAP_DEFAULTS, useEnergy: metric === 'energy' });
+      out[r.name] = await analyseTapFile(entry, { ...TAP_DEFAULTS, useEnergy: metric === 'energy' });
     }
     await expect(asJson(out)).toMatchFileSnapshot(golden(`tap-analysis-${metric}`));
   });
@@ -28,24 +32,24 @@ describe('golden: Tap Analyser', () => {
 function clusterPipeline(files, o = CLUSTER_DEFAULTS) {
   const X = [], meta = [], perFile = {};
   for (const f of files) {
-    const samples = wl.trimSignalRF(f.samples, SR, 0, 0);
-    const onsets = wl.detectTapsRF(samples, SR, { minGapMs: o.minGapMs });
-    const noiseSpectrum = wl.estimateNoiseSpectrumRF(samples, SR, onsets, o.windowMs);
+    const samples = trimSignalRF(f.samples, SR, 0, 0);
+    const onsets = detectTapsRF(samples, SR, { minGapMs: o.minGapMs });
+    const noiseSpectrum = estimateNoiseSpectrumRF(samples, SR, onsets, o.windowMs);
     perFile[f.name] = { onsets, noiseSpectrum };
     onsets.forEach((onset, i) => {
-      const seg = wl.extractWindowRF(samples, SR, onset, o.windowMs, o.offsetSec * 1000);
-      X.push(Array.from(wl.fftFeaturesRF(seg, SR, { nBins: o.nBins, fmin: o.fmin, fmax: o.fmax, noiseSpectrum })));
+      const seg = extractWindowRF(samples, SR, onset, o.windowMs, o.offsetSec * 1000);
+      X.push(Array.from(fftFeaturesRF(seg, SR, { nBins: o.nBins, fmin: o.fmin, fmax: o.fmax, noiseSpectrum })));
       meta.push({ file: f.name, tapIndex: i });
     });
   }
-  const km = wl.kmeansClusterAutoK(X, { kRange: [2, 3, 4, 5, 6, 7, 8] });
-  const rf = wl.rfProximityClustering(X, km.k, { nEstimators: o.nEstimators, randomState: 42 });
+  const km = kmeansClusterAutoK(X, { kRange: [2, 3, 4, 5, 6, 7, 8] });
+  const rf = rfProximityClustering(X, km.k, { nEstimators: o.nEstimators, randomState: 42 });
   return {
     perFile, X, meta,
     kmeans: { k: km.k, labels: km.labels, scores: km.scores },
     rf: { labels: rf.labels, importances: rf.importances, proximity: rf.proximity },
-    agreement: wl.adjustedRandScore(km.labels, rf.labels),
-    edges: wl.getBinEdgesRF(SR, o.nBins, o.fmin, o.fmax),
+    agreement: adjustedRandScore(km.labels, rf.labels),
+    edges: getBinEdgesRF(SR, o.nBins, o.fmin, o.fmax),
   };
 }
 
@@ -68,7 +72,7 @@ describe('golden: Clustering', () => {
 
 describe('golden: Waveform snapshot spectrum', () => {
   it('computeSpectrumAt on a four-tone chord', async () => {
-    const cap = wl.computeSpectrumAt(fakeAudioBuffer(chord(), 44100), 0.5);
+    const cap = computeSpectrumAt(fakeAudioBuffer(chord(), 44100), 0.5);
     const every = 256;
     const out = {
       peaks: cap.peaks, rms: cap.rms, N: cap.N, M: cap.M,
