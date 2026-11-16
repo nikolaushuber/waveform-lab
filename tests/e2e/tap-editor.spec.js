@@ -18,8 +18,13 @@ async function editor(page) {
   };
 }
 
+// Waits until a file is shown AND its detection has finished. (Checking only
+// for "detecting" to disappear passed too early, while the summary still
+// said "Load a recording…" — and on a cold CI runner Pyodide takes a while.)
 async function waitDetected(page) {
-  await expect(page.locator('#tapEditorSummary')).not.toContainText('detecting', { timeout: 120_000 });
+  const summary = page.locator('#tapEditorSummary');
+  await expect(summary).toContainText('Crop start', { timeout: 60_000 });
+  await expect(summary).not.toContainText('detecting', { timeout: 120_000 });
 }
 
 test('tap editor: drag the crop, add/remove taps, analyse exactly what is shown', async ({ page }) => {
