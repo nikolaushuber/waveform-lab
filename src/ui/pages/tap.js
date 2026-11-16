@@ -3,7 +3,7 @@ import { toMono } from '../../core/mono.js';
 import { callPython, waitForPython } from '../../engines/python.js';
 import { dropzoneTap, el, fileInputTap, runTapBtn, scatterCanvas, scatterLegend, scatterTooltip, tapFileCount, tapFreqRangeLabel, tapMetricNote, tapMetricSelect, tapResultsBody, tapRows, tapStatus, tapTopNSelect } from '../dom.js';
 import { sortByName, uid } from '../format.js';
-import { refreshTapEditor, requestDetection, selectTapEntry, tapRowSummary, tapsForAnalysis } from './tap-recording.js';
+import { refreshTapEditor, requestDetection, selectTapEntry, tapRowSummary, tapsForAnalysis, windowOffset } from './tap-recording.js';
 export const TAP_METRIC_NOTES = {
   magnitude: 'Peaks are found and normalised by linear FFT magnitude — the original behaviour.',
   energy: 'Peaks are ranked by normalised energy (energy ÷ −3dB bandwidth) — rewards sharp, well-defined resonances over broad, diffuse ones of equal energy (multi_energy.py).',
@@ -138,6 +138,7 @@ export async function runTapAnalysis(){
     topNBasis:  parseInt(el('advTopNBasis').value, 10) || 10,
     tolerance:  parseFloat(el('advTolerance').value) || 2,
     useEnergy:  el('tapMetric').value === 'energy',
+    windowOffset: windowOffset(),
   };
 
   try{

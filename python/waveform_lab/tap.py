@@ -113,8 +113,14 @@ def detect_tap_events(samples, sr, num_events, min_gap_sec, skip_start_sec):
     return sorted(out)
 
 
+# Each tap's analysis window: WINDOW_LENGTH seconds starting WINDOW_OFFSET
+# after the tap (negative = before it, so the window encloses the attack).
+WINDOW_OFFSET = 0.1
+WINDOW_LENGTH = 1.0
+
+
 def extract_event_window(samples, sr, peak_idx, offset_sec, duration_sec):
-    start = peak_idx + js_round(offset_sec * sr)
+    start = max(0, peak_idx + js_round(offset_sec * sr))
     if start >= len(samples):
         raise TapAnalysisError("offset window exceeds file length for this event")
     return samples[start:min(start + js_round(duration_sec * sr), len(samples))]
@@ -316,7 +322,8 @@ def analyse_taps(samples, sr, taps_sec, opts, crop_start_sec=0.0, crop_end_sec=0
 
     taps_sec: tap positions in seconds (detected or hand-edited); taps
     before crop_start_sec or past the Crop End trim are ignored.
-    opts: {'minFreq', 'maxFreq', 'topNBasis', 'tolerance', 'useEnergy'}.
+    opts: {'minFreq', 'maxFreq', 'topNBasis', 'tolerance', 'useEnergy'} and
+          optionally 'windowOffset' (seconds after the tap, default 0.1).
     Returns {'freqSummary', 'eventCount', 'detectedEvents'}.
     """
     samples = _trim_end(np.asarray(samples, dtype=np.float64), sr, crop_end_sec)
@@ -328,7 +335,7 @@ def analyse_taps(samples, sr, taps_sec, opts, crop_start_sec=0.0, crop_end_sec=0
     events = []
     for i, p in enumerate(peaks):
         try:
-            window = extract_event_window(samples, sr, p, 0.1, 1.0)
+            window = extract_event_window(samples, sr, p, opts.get("windowOffset", WINDOW_OFFSET), WINDOW_LENGTH)
         except TapAnalysisError:
             continue
         if len(window) < 16:

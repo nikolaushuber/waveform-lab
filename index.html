@@ -315,6 +315,12 @@
             <input type="number" id="tapCropEnd" class="freq-min-input" min="0" step="0.1" placeholder="none" title="Seconds cut off the end (e.g. trailing noise). Blank = none.">
             <span>s</span>
           </div>
+          <div class="axis-group">
+            <span class="axis-label">Window start</span>
+            <input type="number" id="tapWindowOffset" class="freq-min-input" value="0.1" min="-1" max="2" step="0.01" title="Where each tap's 1 s analysis window starts, in seconds after the tap. Negative values start it before the attack, so the window encloses the tap. Applies to all files.">
+            <span>s</span>
+            <span class="te-unit">after tap · all files</span>
+          </div>
         </div>
         <div class="transport te-transport">
           <button class="ctrl" id="tapPlayBtn" disabled title="Play / Pause">&#9658;</button>
@@ -332,7 +338,7 @@
           <button class="text-btn" type="button" id="tapZoomCrop" title="Zoom to the cropped range">Zoom to crop</button>
           <span class="te-zoom-label" id="tapZoomLabel"></span>
         </div>
-        <div class="te-hint">Ctrl/⌘ + scroll or pinch to zoom · scroll sideways or Shift + scroll to pan · drag the strip below the recording to move around · click to move the playhead · drag the red edges to crop. Each tap is a block from its attack (amber line) to the end of its analysis window, numbered in analysis order; the lighter start of the bar is the 0.1 s skipped before the window. Drag a tap by its bar or line — it snaps onto a nearby attack if there is one (the line turns solid) · double-click to add one · right-click to remove · hold Alt to place a tap exactly without snapping.</div>
+        <div class="te-hint">Ctrl/⌘ + scroll or pinch to zoom · scroll sideways or Shift + scroll to pan · drag the strip below the recording to move around · click to move the playhead · drag the red edges to crop. Each tap is a block covering its attack (amber line) and its 1 s analysis window, numbered in analysis order; a lighter start of the bar is the part skipped between the attack and the window (set by Window start). Drag a tap by its bar or line — it snaps onto a nearby attack if there is one (the line turns solid) · double-click to add one · right-click to remove · hold Alt to place a tap exactly without snapping.</div>
       </div>
 
       <div class="panel">

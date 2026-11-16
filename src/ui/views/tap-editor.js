@@ -7,7 +7,7 @@ import { drawWaveformOverview, drawWaveformRange } from './waveform.js';
 // only drawing, the visible window and drag state; the page passes in a
 // `view` and gets edits back through the callbacks:
 //
-//   view = { audioBuffer, cropStart, cropStartAuto, cropEnd, taps, edited, pending, error }
+//   view = { audioBuffer, cropStart, cropStartAuto, cropEnd, taps, windowOffset, edited, pending, error }
 //          (all times in seconds; cropEnd = seconds cut off the end)
 //   onCropChange({ cropStart } | { cropEnd })   after a crop edge is dropped
 //   onTapsChange(taps)                          after a tap is moved, added or removed
@@ -20,8 +20,10 @@ import { drawWaveformOverview, drawWaveformRange } from './waveform.js';
 // fit() / zoomTo(). Pan: horizontal wheel / Shift + wheel, or drag on the
 // overview strip.
 
-// Each tap's FFT window, as in analyse_taps (python/waveform_lab/tap.py).
-const WINDOW_OFFSET = 0.1, WINDOW_LENGTH = 1.0;
+// Each tap's FFT window is WINDOW_LENGTH long, starting view.windowOffset
+// after the tap (negative = before it), as in analyse_taps
+// (python/waveform_lab/tap.py).
+const WINDOW_LENGTH = 1.0;
 const HIT_PX = 7;        // CSS pixels
 const MIN_SPAN = 0.005;  // seconds — deepest zoom
 
@@ -98,15 +100,19 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     return view.taps.map((t, i) => (i === drag.index ? drag.time : t));
   }
   const inside = (t) => t >= cropStartT() && t < cropEndT();
+  const offset = () => (view.windowOffset != null ? view.windowOffset : 0.1);
+  // A tap's block: from the earlier of its attack and its window start, to the window end.
+  const blockStart = (t) => Math.min(t, t + offset());
+  const windowEnd = (t) => t + offset() + WINDOW_LENGTH;
 
   // Lane per tap (by index): first lane whose previous block has ended.
   function assignLanes(times){
     const order = times.map((t, i) => i).sort((a, b) => times[a] - times[b]);
     const ends = [], lanes = new Array(times.length);
     for (const i of order){
-      let lane = ends.findIndex((e) => e <= times[i]);
+      let lane = ends.findIndex((e) => e <= blockStart(times[i]));
       if (lane < 0) lane = ends.length < MAX_LANES ? ends.length : ends.indexOf(Math.min(...ends));
-      ends[lane] = times[i] + WINDOW_OFFSET + WINDOW_LENGTH;
+      ends[lane] = windowEnd(times[i]);
       lanes[i] = lane;
     }
     return lanes;
@@ -114,11 +120,12 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   const lanesNow = () => (drag && drag.lanes) || assignLanes(view.taps);
   const laneY = (lane) => LANE_TOP + lane * (LANE_H + LANE_GAP);
 
-  // Header bar of tap i: from the attack to the end of its window (cut at
-  // the crop end when the tap is inside the crop).
+  // Header bar of tap t: the whole block (cut at the crop end when the tap
+  // is inside the crop). xt = the attack, xw = where the window starts.
   function header(t, lane){
-    const end = t + WINDOW_OFFSET + WINDOW_LENGTH;
-    return { x0: toX(t), x1: toX(inside(t) ? Math.min(end, cropEndT()) : end), y0: laneY(lane), y1: laneY(lane) + LANE_H };
+    const end = windowEnd(t);
+    const x1 = toX(inside(t) ? Math.min(end, cropEndT()) : end);
+    return { x0: toX(blockStart(t)), x1, xt: toX(t), xw: Math.min(x1, toX(t + offset())), y0: laneY(lane), y1: laneY(lane) + LANE_H };
   }
 
   // What's under (x, y): a tap (its header bar, or its attack line at any
@@ -202,7 +209,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
       if (r.x1 < 0 || r.x0 > w) return;
       const on = inside(t);
       const active = (drag && drag.kind === 'tap' && drag.index === i) || (hover && hover.kind === 'tap' && hover.index === i);
-      const xg = Math.min(r.x1, toX(t + WINDOW_OFFSET)); // end of the 0.1 s gap
+      const xg = r.xw; // window start (after the attack, or before it for a negative offset)
       // Body: the analysed window, down to the bottom.
       ctx.fillStyle = on ? COLORS.tapBody : COLORS.tapOffBody;
       ctx.fillRect(xg, r.y1, r.x1 - xg, h - r.y1);
@@ -211,10 +218,10 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
       // While dragging, a solid line shows the tap has snapped onto an attack.
       const snapped = drag && drag.kind === 'tap' && drag.index === i && drag.snapped;
       ctx.fillStyle = snapped ? COLORS.tap : on ? (active ? 'rgba(181,105,10,0.75)' : 'rgba(181,105,10,0.4)') : 'rgba(150,150,145,0.4)';
-      ctx.fillRect(r.x0 - (active ? 1 : 0.5), r.y0, active ? 2 : 1, h - r.y0);
-      // Header: lighter over the gap, solid over the window, numbered.
+      ctx.fillRect(r.xt - (active ? 1 : 0.5), r.y0, active ? 2 : 1, h - r.y0);
+      // Header: lighter over any gap between attack and window, solid over the window, numbered.
       ctx.fillStyle = on ? COLORS.tapGap : 'rgba(180,180,173,0.35)';
-      ctx.fillRect(r.x0, r.y0, xg - r.x0, LANE_H);
+      if (xg > r.xt) ctx.fillRect(r.xt, r.y0, xg - r.xt, LANE_H);
       ctx.fillStyle = on ? COLORS.tap : COLORS.tapOff;
       ctx.fillRect(xg, r.y0, r.x1 - xg, LANE_H);
       if (!on){
@@ -251,6 +258,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     canvas.dataset.cropStart = view.cropStart.toFixed(3);
     canvas.dataset.gain = gain.toFixed(3);
     canvas.dataset.taps = view.taps.map((t) => t.toFixed(4)).join(',');
+    canvas.dataset.windowOffset = String(offset());
     canvas.dataset.viewStart = win.start.toFixed(4);
     canvas.dataset.viewEnd = win.end.toFixed(4);
     drawOverview();

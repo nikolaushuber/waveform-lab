@@ -129,3 +129,19 @@ def test_analyse_taps_uses_exactly_the_given_taps():
     assert res["detectedEvents"] == 2
     with pytest.raises(tap.TapAnalysisError, match="no taps inside"):
         tap.analyse_taps(samples, SR, [100.0], OPTS)
+
+
+def test_window_offset_is_a_parameter():
+    _, samples = recordings()[0]
+    taps = tap.detect(samples, SR, {"skipStart": "0", "skipEnd": ""}, OPTS)["taps"]
+    default = tap.analyse_taps(samples, SR, taps, OPTS)
+    assert tap.analyse_taps(samples, SR, taps, dict(OPTS, windowOffset=0.1)) == default
+    # Starting before the attack (enclosing it) is allowed and changes the spectra.
+    early = tap.analyse_taps(samples, SR, taps, dict(OPTS, windowOffset=-0.01))
+    assert early["eventCount"] == default["eventCount"] == 5
+    assert early["freqSummary"] != default["freqSummary"]
+
+
+def test_negative_offset_is_clamped_at_the_file_start():
+    sig = np.arange(100.0)
+    assert tap.extract_event_window(sig, 100, 2, -0.05, 0.03).tolist() == [0, 1, 2]

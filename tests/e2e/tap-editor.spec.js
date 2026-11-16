@@ -266,6 +266,38 @@ test('tap editor: dragged taps snap to a nearby attack, and stay put elsewhere',
   expect(errors).toEqual([]);
 });
 
+test('tap editor: Window start is a setting used by the editor and the analysis', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors = await openApp(page);
+  await gotoTab(page, 'tap');
+  await page.locator('#fileInputTap').setInputFiles(wavFile('a1.wav', A1.samples));
+  await waitDetected(page);
+  const ed = await editor(page);
+  await expect(page.locator('#tapWindowOffset')).toHaveValue('0.1');
+  await expect(ed.canvas).toHaveAttribute('data-window-offset', '0.1');
+
+  const run = async () => {
+    await page.locator('#runTapBtn').click();
+    await expect(page.locator('#tapStatus')).toContainText('Done', { timeout: 120_000 });
+    return page.locator('#tapResultsBody').innerText();
+  };
+  const before = await run();
+
+  // Start the window 10 ms before the attack, so it encloses the tap.
+  await page.locator('#tapWindowOffset').fill('-0.01');
+  await page.locator('#tapWindowOffset').press('Enter');
+  await expect(ed.canvas).toHaveAttribute('data-window-offset', '-0.01');
+  const after = await run();
+  expect(after).toContain('4 of 4 events analysed');
+  expect(after).not.toEqual(before);
+
+  // Nonsense input falls back to the default.
+  await page.locator('#tapWindowOffset').fill('');
+  await page.locator('#tapWindowOffset').press('Enter');
+  await expect(page.locator('#tapWindowOffset')).toHaveValue('0.1');
+  expect(errors).toEqual([]);
+});
+
 test('tap editor: hand-edited taps are saved with File Folder files', async ({ page }) => {
   test.setTimeout(150_000);
   const errors = await openApp(page);

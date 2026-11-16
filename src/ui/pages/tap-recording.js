@@ -26,6 +26,14 @@ const versions = new WeakMap();
 
 const num = (v) => { const x = parseFloat(v); return isFinite(x) && x > 0 ? x : 0; };
 
+// Where each tap's analysis window starts, seconds after the tap (global
+// setting in the Recording panel; negative = before the attack).
+export const DEFAULT_WINDOW_OFFSET = 0.1;
+export function windowOffset(){
+  const x = parseFloat(el('tapWindowOffset').value);
+  return isFinite(x) ? Math.min(2, Math.max(-1, x)) : DEFAULT_WINDOW_OFFSET;
+}
+
 export function selectedTapEntry(){
   return S.tapLibrary.find((e) => e.id === S.tapSelectedId) || null;
 }
@@ -45,6 +53,7 @@ export function tapView(entry){
     cropStartAuto: auto,
     cropEnd: num(entry.skipEnd),
     taps: entry.taps || (det ? det.taps : []),
+    windowOffset: windowOffset(),
     edited: entry.taps != null,
     pending: !!entry._detecting || !entry.detection,
     error: entry.detection && entry.detection.error,
@@ -257,6 +266,11 @@ export function init(){
     changed(entry, false);
   });
   // Detection settings changed: re-detect every file that uses detected taps.
+  el('tapWindowOffset').addEventListener('change', () => {
+    const input = el('tapWindowOffset');
+    if (!isFinite(parseFloat(input.value))) input.value = DEFAULT_WINDOW_OFFSET;
+    renderTapRows();
+  });
   ['advNumEvents', 'advMinGap'].forEach((id) => el(id).addEventListener('change', () => {
     S.tapLibrary.forEach((e) => { if (e.taps == null) requestDetection(e); });
     renderTapRows();
