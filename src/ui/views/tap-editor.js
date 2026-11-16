@@ -50,6 +50,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   let drag = null;       // { kind: 'start' | 'end' | 'tap', index, time }
   let hover = null;
   let panDrag = null;    // { offset } while dragging the overview window
+  let scale = null;      // { audioBuffer, from, to, gain } — cached auto-scale
 
   const dur = () => view.audioBuffer.duration || 1;
   const span = () => win.end - win.start;
@@ -58,6 +59,22 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   const scaleOf = (c) => { const w = c.getBoundingClientRect().width; return w ? c.width / w : 1; };
   const eventX = (e, c = canvas) => (e.clientX - c.getBoundingClientRect().left) * scaleOf(c);
   const eventY = (e) => { const r = canvas.getBoundingClientRect(); return r.height ? (e.clientY - r.top) * (canvas.height / r.height) : 0; };
+
+  // Vertical auto-scale: the loudest sample inside the crop fills the height,
+  // so quiet recordings (or a loud cropped-out intro) don't leave the taps
+  // as a flat line. Capped at ×50 so near-silence isn't blown up to noise.
+  function gainFor(){
+    const from = view.cropStart, to = dur() - view.cropEnd;
+    if (scale && scale.audioBuffer === view.audioBuffer && scale.from === from && scale.to === to) return scale.gain;
+    const data = view.audioBuffer.getChannelData(0), sr = view.audioBuffer.sampleRate;
+    let peak = 0;
+    for (let i = Math.max(0, Math.floor(from * sr)), n = Math.min(data.length, Math.ceil(to * sr)); i < n; i++){
+      const v = Math.abs(data[i]); if (v > peak) peak = v;
+    }
+    const gain = peak > 0 ? Math.min(50, 1 / peak) : 1;
+    scale = { audioBuffer: view.audioBuffer, from, to, gain };
+    return gain;
+  }
 
   function setWindow(next){
     win = clampWindow(next.start, next.end, dur(), MIN_SPAN);
@@ -149,11 +166,12 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     }
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
-    if (!base || base.audioBuffer !== view.audioBuffer || base.start !== win.start || base.end !== win.end || base.w !== w || base.h !== h){
+    const gain = gainFor();
+    if (!base || base.audioBuffer !== view.audioBuffer || base.start !== win.start || base.end !== win.end || base.w !== w || base.h !== h || base.gain !== gain){
       const off = document.createElement('canvas');
       off.width = w; off.height = h;
-      drawWaveformRange(off, view.audioBuffer, win.start, win.end, niceTicks(win.start, win.end, 7));
-      base = { audioBuffer: view.audioBuffer, start: win.start, end: win.end, w, h, canvas: off };
+      drawWaveformRange(off, view.audioBuffer, win.start, win.end, niceTicks(win.start, win.end, 7), gain);
+      base = { audioBuffer: view.audioBuffer, start: win.start, end: win.end, w, h, gain, canvas: off };
     }
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(base.canvas, 0, 0);
@@ -179,9 +197,10 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
       // Body: the analysed window, down to the bottom.
       ctx.fillStyle = on ? COLORS.tapBody : COLORS.tapOffBody;
       ctx.fillRect(xg, r.y1, r.x1 - xg, h - r.y1);
-      // Attack line.
-      ctx.fillStyle = on ? COLORS.tap : COLORS.tapOff;
-      ctx.fillRect(r.x0 - (active ? 1.5 : 1), r.y0, active ? 3 : 2, h - r.y0);
+      // Attack line — translucent, because taps snap to their loudest
+      // sample and a solid line would hide exactly the peak of the spike.
+      ctx.fillStyle = on ? (active ? 'rgba(181,105,10,0.75)' : 'rgba(181,105,10,0.4)') : 'rgba(150,150,145,0.4)';
+      ctx.fillRect(r.x0 - (active ? 1 : 0.5), r.y0, active ? 2 : 1, h - r.y0);
       // Header: lighter over the gap, solid over the window, numbered.
       ctx.fillStyle = on ? COLORS.tapGap : 'rgba(180,180,173,0.35)';
       ctx.fillRect(r.x0, r.y0, xg - r.x0, LANE_H);
@@ -219,6 +238,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
 
     canvas.dataset.tapCount = String(view.taps.filter((t) => t >= view.cropStart && t < dur() - view.cropEnd).length);
     canvas.dataset.cropStart = view.cropStart.toFixed(3);
+    canvas.dataset.gain = gain.toFixed(3);
     canvas.dataset.taps = view.taps.map((t) => t.toFixed(4)).join(',');
     canvas.dataset.viewStart = win.start.toFixed(4);
     canvas.dataset.viewEnd = win.end.toFixed(4);
@@ -229,11 +249,12 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   function drawOverview(){
     const ctx = overview.getContext('2d');
     const w = overview.width, h = overview.height;
-    if (!overBase || overBase.audioBuffer !== view.audioBuffer || overBase.w !== w || overBase.h !== h){
+    const gain = gainFor();
+    if (!overBase || overBase.audioBuffer !== view.audioBuffer || overBase.w !== w || overBase.h !== h || overBase.gain !== gain){
       const off = document.createElement('canvas');
       off.width = w; off.height = h;
-      drawWaveformOverview(off, view.audioBuffer);
-      overBase = { audioBuffer: view.audioBuffer, w, h, canvas: off };
+      drawWaveformOverview(off, view.audioBuffer, undefined, undefined, gain);
+      overBase = { audioBuffer: view.audioBuffer, w, h, gain, canvas: off };
     }
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(overBase.canvas, 0, 0);

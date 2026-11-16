@@ -3,7 +3,8 @@ import { fmtTime } from '../format.js';
 // ---------------- Drawing: waveform overview ----------------
 // `durationSec`, if given, adds time-axis tick labels along the bottom
 // (used on the bigger Compare-page previews for extra detail).
-export function drawWaveformOverview(canvasEl, audioBuffer, playheadFrac, durationSec){
+// `gain` (default 1) scales the amplitude; louder parts are clipped.
+export function drawWaveformOverview(canvasEl, audioBuffer, playheadFrac, durationSec, gain = 1){
   const ctx = canvasEl.getContext('2d');
   const w = canvasEl.width, h = canvasEl.height;
   ctx.clearRect(0,0,w,h);
@@ -33,8 +34,9 @@ export function drawWaveformOverview(canvasEl, audioBuffer, playheadFrac, durati
       if (v < min) min = v;
       if (v > max) max = v;
     }
-    ctx.moveTo(x, mid + min*mid*0.9);
-    ctx.lineTo(x, mid + max*mid*0.9);
+    const lo = Math.max(-1, Math.min(1, min*gain)), hi = Math.max(-1, Math.min(1, max*gain));
+    ctx.moveTo(x, mid + lo*mid*0.9);
+    ctx.lineTo(x, mid + hi*mid*0.9);
   }
   ctx.stroke();
 
@@ -65,8 +67,9 @@ export function drawWaveformOverview(canvasEl, audioBuffer, playheadFrac, durati
 
 // Waveform of `audioBuffer` (channel 0) between t0 and t1 seconds, with a
 // time axis. Zoomed out it draws a min/max bar per pixel; zoomed in far
-// enough to see individual samples it draws a line through them.
-export function drawWaveformRange(canvasEl, audioBuffer, t0, t1, ticks){
+// enough to see individual samples it draws a line through them. `gain`
+// scales the amplitude (louder parts are clipped at the edges).
+export function drawWaveformRange(canvasEl, audioBuffer, t0, t1, ticks, gain = 1){
   const ctx = canvasEl.getContext('2d');
   const w = canvasEl.width, h = canvasEl.height;
   ctx.clearRect(0, 0, w, h);
@@ -81,7 +84,7 @@ export function drawWaveformRange(canvasEl, audioBuffer, t0, t1, ticks){
   const sr = audioBuffer.sampleRate;
   const data = audioBuffer.getChannelData(0);
   const perPx = ((t1 - t0) * sr) / w;
-  const yOf = (v) => mid - v * mid * 0.9;
+  const yOf = (v) => mid - Math.max(-1, Math.min(1, v * gain)) * mid * 0.9;
   ctx.strokeStyle = '#1f9d5c';
   ctx.lineWidth = 1.25;
   ctx.beginPath();

@@ -94,6 +94,11 @@ test('tap editor: typed crop, click-to-seek and playback', async ({ page }) => {
   await waitDetected(page);
   await expect(page.locator('#tapRows canvas')).toHaveCount(0); // no more row thumbnails
   const ed = await editor(page);
+  // The waveform is scaled so the loudest sample inside the crop fills the
+  // height (a1 peaks around 0.7, so it's drawn ~1.4x larger).
+  const gain = Number(await ed.canvas.getAttribute('data-gain'));
+  expect(gain).toBeGreaterThan(1.2);
+  expect(gain).toBeLessThan(2);
 
   // Typing a crop in the panel behaves like dragging the edge.
   await page.locator('#tapCropStart').fill('2');
