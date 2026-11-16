@@ -192,6 +192,44 @@ test('tap editor: zoom, pan and edit while zoomed', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('tap editor: taps are blocks with header bars in lanes', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors = await openApp(page);
+  await gotoTab(page, 'tap');
+  await page.locator('#fileInputTap').setInputFiles(wavFile('a1.wav', A1.samples));
+  await waitDetected(page);
+  const ed = await editor(page);
+  const taps = async () => (await ed.canvas.getAttribute('data-taps')).split(',').map(Number);
+
+  // a1's taps are 0.8-0.9 s apart, closer than a window (1.1 s), so
+  // consecutive header bars alternate between lane 0 and lane 1.
+  const before = await taps();
+  expect(before).toHaveLength(4);
+  const headerY = (lane) => ed.box.y + (4 + lane * 18 + 8) * (ed.box.height / 180);
+
+  // Drag tap 2's header bar (lane 1) 0.2 s to the right, Alt = no snapping:
+  // the tap moves by exactly the drag distance, wherever the bar was grabbed.
+  const t = before[1];
+  const grabT = t + 0.5;
+  const from = { x: ed.at(grabT).x, y: headerY(1) };
+  const to = { x: ed.at(grabT + 0.2).x, y: headerY(1) };
+  await page.mouse.move(from.x, from.y);
+  await page.keyboard.down('Alt');
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  await expect.poll(async () => (await taps())[1]).toBeCloseTo(t + 0.2, 1);
+  await expect(page.locator('#tapEditorSummary')).toContainText('(edited)');
+
+  // Right-click on a header bar removes that tap.
+  const third = (await taps())[2];
+  await page.mouse.click(ed.at(third + 0.6).x, headerY(0), { button: 'right' });
+  await expect.poll(async () => (await taps()).length).toBe(3);
+  expect((await taps()).some((x) => Math.abs(x - third) < 1e-3)).toBe(false);
+  expect(errors).toEqual([]);
+});
+
 test('tap editor: hand-edited taps are saved with File Folder files', async ({ page }) => {
   test.setTimeout(150_000);
   const errors = await openApp(page);

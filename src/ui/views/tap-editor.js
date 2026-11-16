@@ -24,13 +24,20 @@ const WINDOW_OFFSET = 0.1, WINDOW_LENGTH = 1.0;
 const HIT_PX = 7;        // CSS pixels
 const MIN_SPAN = 0.005;  // seconds — deepest zoom
 
+// Each tap is drawn as a block from its attack to the end of its analysis
+// window, with a numbered header bar at the top (the handle). Blocks whose
+// windows overlap go into separate lanes.
+const LANE_TOP = 4, LANE_H = 16, LANE_GAP = 2, MAX_LANES = 6;
+
 const COLORS = {
   crop: 'rgba(194,59,46,0.16)',
   autoHatch: 'rgba(194,59,46,0.30)',
   edge: '#a8322a',
   tap: '#b5690a',
+  tapGap: 'rgba(181,105,10,0.35)',
+  tapBody: 'rgba(181,105,10,0.07)',
   tapOff: '#b4b4ad',
-  window: 'rgba(47,111,176,0.09)',
+  tapOffBody: 'rgba(130,130,125,0.06)',
   label: '#6b6b64',
 };
 
@@ -50,6 +57,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   const toT = (x) => Math.min(dur(), Math.max(0, win.start + (x / canvas.width) * span()));
   const scaleOf = (c) => { const w = c.getBoundingClientRect().width; return w ? c.width / w : 1; };
   const eventX = (e, c = canvas) => (e.clientX - c.getBoundingClientRect().left) * scaleOf(c);
+  const eventY = (e) => { const r = canvas.getBoundingClientRect(); return r.height ? (e.clientY - r.top) * (canvas.height / r.height) : 0; };
 
   function setWindow(next){
     win = clampWindow(next.start, next.end, dur(), MIN_SPAN);
@@ -65,10 +73,39 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   }
   const inside = (t) => t >= cropStartT() && t < cropEndT();
 
-  function hit(x){
+  // Lane per tap (by index): first lane whose previous block has ended.
+  function assignLanes(times){
+    const order = times.map((t, i) => i).sort((a, b) => times[a] - times[b]);
+    const ends = [], lanes = new Array(times.length);
+    for (const i of order){
+      let lane = ends.findIndex((e) => e <= times[i]);
+      if (lane < 0) lane = ends.length < MAX_LANES ? ends.length : ends.indexOf(Math.min(...ends));
+      ends[lane] = times[i] + WINDOW_OFFSET + WINDOW_LENGTH;
+      lanes[i] = lane;
+    }
+    return lanes;
+  }
+  const lanesNow = () => (drag && drag.lanes) || assignLanes(view.taps);
+  const laneY = (lane) => LANE_TOP + lane * (LANE_H + LANE_GAP);
+
+  // Header bar of tap i: from the attack to the end of its window (cut at
+  // the crop end when the tap is inside the crop).
+  function header(t, lane){
+    const end = t + WINDOW_OFFSET + WINDOW_LENGTH;
+    return { x0: toX(t), x1: toX(inside(t) ? Math.min(end, cropEndT()) : end), y0: laneY(lane), y1: laneY(lane) + LANE_H };
+  }
+
+  // What's under (x, y): a tap (its header bar, or its attack line at any
+  // height), else a crop edge.
+  function hit(x, y){
     const tol = HIT_PX * scaleOf(canvas);
+    const taps = tapTimes(), lanes = lanesNow();
+    for (let i = taps.length - 1; i >= 0; i--){
+      const r = header(taps[i], lanes[i]);
+      if (y >= r.y0 && y <= r.y1 && x >= r.x0 - tol && x <= Math.max(r.x1, r.x0 + tol)) return { kind: 'tap', index: i };
+    }
     let best = null;
-    tapTimes().forEach((t, i) => {
+    taps.forEach((t, i) => {
       const d = Math.abs(toX(t) - x);
       if (d <= tol && (!best || d < best.d)) best = { kind: 'tap', index: i, d };
     });
@@ -129,23 +166,37 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     }
     if (xe < w){ ctx.fillStyle = COLORS.crop; ctx.fillRect(Math.max(0, xe), 0, w - Math.max(0, xe), h); }
 
-    const taps = tapTimes();
-    ctx.fillStyle = COLORS.window;
-    taps.forEach((t) => {
-      if (!inside(t)) return;
-      const a = toX(t + WINDOW_OFFSET), b = toX(Math.min(ce, t + WINDOW_OFFSET + WINDOW_LENGTH));
-      if (b > 0 && a < w && b > a) ctx.fillRect(Math.max(0, a), 0, Math.min(w, b) - Math.max(0, a), h);
-    });
+    const taps = tapTimes(), lanes = lanesNow();
+    let number = 0;
+    const numbers = taps.map((t) => (inside(t) ? ++number : null));
+    ctx.font = '11px "JetBrains Mono", monospace';
     taps.forEach((t, i) => {
-      const x = toX(t);
-      if (x < -10 || x > w + 10) return;
+      const r = header(t, lanes[i]);
+      if (r.x1 < 0 || r.x0 > w) return;
       const on = inside(t);
       const active = (drag && drag.kind === 'tap' && drag.index === i) || (hover && hover.kind === 'tap' && hover.index === i);
-      ctx.strokeStyle = on ? COLORS.tap : COLORS.tapOff;
-      ctx.lineWidth = active ? 2.5 : 1.5;
-      ctx.beginPath(); ctx.moveTo(x, 14); ctx.lineTo(x, h - 22); ctx.stroke();
+      const xg = Math.min(r.x1, toX(t + WINDOW_OFFSET)); // end of the 0.1 s gap
+      // Body: the analysed window, down to the bottom.
+      ctx.fillStyle = on ? COLORS.tapBody : COLORS.tapOffBody;
+      ctx.fillRect(xg, r.y1, r.x1 - xg, h - r.y1);
+      // Attack line.
       ctx.fillStyle = on ? COLORS.tap : COLORS.tapOff;
-      ctx.beginPath(); ctx.arc(x, 12, active ? 7 : 5.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillRect(r.x0 - (active ? 1.5 : 1), r.y0, active ? 3 : 2, h - r.y0);
+      // Header: lighter over the gap, solid over the window, numbered.
+      ctx.fillStyle = on ? COLORS.tapGap : 'rgba(180,180,173,0.35)';
+      ctx.fillRect(r.x0, r.y0, xg - r.x0, LANE_H);
+      ctx.fillStyle = on ? COLORS.tap : COLORS.tapOff;
+      ctx.fillRect(xg, r.y0, r.x1 - xg, LANE_H);
+      if (!on){
+        ctx.strokeStyle = '#8a8a83'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+        ctx.strokeRect(r.x0 + 0.5, r.y0 + 0.5, r.x1 - r.x0 - 1, LANE_H - 1);
+        ctx.setLineDash([]);
+      }
+      if (active){ ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5; ctx.strokeRect(r.x0 + 0.75, r.y0 + 0.75, r.x1 - r.x0 - 1.5, LANE_H - 1.5); }
+      if (numbers[i] != null && r.x1 - xg > 14){
+        ctx.fillStyle = '#fff';
+        ctx.fillText(String(numbers[i]), Math.max(xg, 0) + 4, r.y0 + 12);
+      }
     });
 
     if (xs >= -5 && xs <= w + 5) edge(ctx, xs, h, (drag && drag.kind === 'start') || (hover && hover.kind === 'start'));
@@ -153,7 +204,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
 
     ctx.font = '12px "JetBrains Mono", monospace';
     if (view.cropStartAuto && xs > 70 && !(drag && drag.kind === 'start')){
-      ctx.fillStyle = COLORS.edge; ctx.fillText('auto crop', 8, 16);
+      ctx.fillStyle = COLORS.edge; ctx.fillText('auto crop', 8, h - 26);
     }
     if (view.pending || view.error){
       const msg = view.error ? `⚠ ${view.error}` : 'detecting taps…';
@@ -168,6 +219,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
 
     canvas.dataset.tapCount = String(view.taps.filter((t) => t >= view.cropStart && t < dur() - view.cropEnd).length);
     canvas.dataset.cropStart = view.cropStart.toFixed(3);
+    canvas.dataset.taps = view.taps.map((t) => t.toFixed(4)).join(',');
     canvas.dataset.viewStart = win.start.toFixed(4);
     canvas.dataset.viewEnd = win.end.toFixed(4);
     drawOverview();
@@ -203,10 +255,12 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   // ---------------- main canvas: crop / taps / seek ----------------
   canvas.addEventListener('pointerdown', (e) => {
     if (!view || e.button !== 0) return;
-    const target = hit(eventX(e));
+    const target = hit(eventX(e), eventY(e));
     if (!target){ if (onSeek) onSeek(toT(eventX(e))); return; }
     const time = target.kind === 'tap' ? view.taps[target.index] : target.kind === 'start' ? view.cropStart : dur() - view.cropEnd;
-    drag = { ...target, time, moved: false };
+    // A tap grabbed by its header keeps the grab offset; lanes stay put while dragging.
+    const grab = target.kind === 'tap' ? toT(eventX(e)) - time : 0;
+    drag = { ...target, time, grab, moved: false, lanes: assignLanes(view.taps) };
     canvas.setPointerCapture(e.pointerId);
     redraw();
   });
@@ -215,7 +269,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     if (!view) return;
     const x = eventX(e);
     if (drag){
-      let t = toT(x);
+      let t = toT(x) - (drag.grab || 0);
       if (drag.kind === 'start') t = Math.min(t, cropEndT() - 0.01);
       if (drag.kind === 'end') t = Math.max(t, cropStartT() + 0.01);
       drag.time = t;
@@ -223,9 +277,12 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
       redraw();
       return;
     }
-    const h = hit(x);
+    const h = hit(x, eventY(e));
     if ((h && h.kind) !== (hover && hover.kind) || (h && h.index) !== (hover && hover.index)){ hover = h; redraw(); }
-    canvas.style.cursor = h ? 'ew-resize' : 'text';
+    canvas.style.cursor = !h ? 'text' : h.kind === 'tap' ? 'grab' : 'ew-resize';
+    canvas.title = !h ? '' : h.kind === 'tap'
+      ? `Tap at ${view.taps[h.index].toFixed(3)} s — drag to move, right-click to remove`
+      : `Crop ${h.kind} — drag to change`;
   });
 
   canvas.addEventListener('pointerup', (e) => {
@@ -250,7 +307,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   canvas.addEventListener('pointerleave', () => { if (hover && !drag){ hover = null; redraw(); } });
 
   canvas.addEventListener('dblclick', (e) => {
-    if (!view || hit(eventX(e))) return;
+    if (!view || hit(eventX(e), eventY(e))) return;
     const t0 = toT(eventX(e));
     const t = e.altKey ? t0 : snap(t0);
     onTapsChange([...view.taps, t].sort((a, b) => a - b));
@@ -258,7 +315,7 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
 
   canvas.addEventListener('contextmenu', (e) => {
     if (!view) return;
-    const target = hit(eventX(e));
+    const target = hit(eventX(e), eventY(e));
     if (!target || target.kind !== 'tap') return;
     e.preventDefault();
     hover = null;
