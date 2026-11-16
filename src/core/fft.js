@@ -96,15 +96,3 @@ export function bluesteinDFT(reIn, imIn, inverse){
   }
   return { re: outRe, im: outIm };
 }
-
-// rfft magnitude spectrum matching np.fft.rfft(x) magnitude bin-for-bin
-export function rfftMag(signal){
-  const n = signal.length;
-  const re = Float64Array.from(signal);
-  const im = new Float64Array(n);
-  const { re: outRe, im: outIm } = bluesteinDFT(re, im, false);
-  const half = Math.floor(n/2) + 1;
-  const mag = new Float64Array(half);
-  for (let k = 0; k < half; k++) mag[k] = Math.hypot(outRe[k], outIm[k]);
-  return mag;
-}

@@ -5,7 +5,17 @@ on:
   pull_request:
 
 jobs:
-  test:
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run pytest
+
+  js:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +26,12 @@ jobs:
       - run: npm ci
       - run: npm run coverage
       - run: npx playwright install --with-deps chromium
+      # Pyodide (~40 MB) as fetched by the browser tests; keyed on the worker,
+      # which pins the Pyodide version.
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/pyodide-e2e
+          key: pyodide-e2e-${{ hashFiles('src/engines/python-worker.js') }}
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()

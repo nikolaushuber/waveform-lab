@@ -26,8 +26,11 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run pytest # don't deploy if the tests fail
+        working-directory: python
       - run: npm ci
-      - run: npm run coverage # don't deploy if the tests fail
+      - run: npm run coverage
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

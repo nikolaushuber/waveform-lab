@@ -1,7 +1,5 @@
 import { S } from '../state.js';
-import { applyHann } from '../../core/signal.js';
-import { autoDbRange } from '../../core/spectrum.js';
-import { computeFftMagExact } from '../../core/tap/peaks.js';
+import { applyHann, autoDbRange, computeFftMagExact } from '../../core/spectrum.js';
 import { idbDelete, idbGetAll } from '../../platform/idb.js';
 import { dropzoneFolder, dropzoneFolderMenu, dzChooseFiles, dzChooseFolder, fileInputFolder, folderCrumbs, folderDirInput, folderFileCount, folderNewFolderBtn, folderRows, folderSearchInput } from '../dom.js';
 import { persistFolderEntry, persistFolderGroup } from '../folder-store.js';
