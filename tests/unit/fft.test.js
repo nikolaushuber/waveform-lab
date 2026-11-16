@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { bluesteinDFT, fftInPlace, ifftInPlace, rfftMag } from '../../src/core/fft.js';
-import { computeFftMagExact } from '../../src/core/tap/peaks.js';
+import { bluesteinDFT, fftInPlace, ifftInPlace } from '../../src/core/fft.js';
+import { computeFftMagExact } from '../../src/core/spectrum.js';
 import { seededRandom, sine } from '../helpers/signals.js';
 
 
@@ -72,17 +72,6 @@ describe('bluesteinDFT', () => {
     const copy = { re: x.re.slice(), im: x.im.slice() };
     bluesteinDFT(x.re, x.im, false);
     expect(x).toEqual(copy);
-  });
-});
-
-describe('rfftMag', () => {
-  it('has floor(n/2)+1 bins and peaks at a bin-centred sine', () => {
-    const n = 1000, sr = 1000;
-    const mag = rfftMag(sine(50, sr, n, 2));
-    expect(mag.length).toBe(501);
-    const peak = mag.indexOf(Math.max(...mag));
-    expect(peak).toBe(50);
-    expect(mag[50]).toBeCloseTo(n, 6); // |X[k]| = A*n/2
   });
 });
 

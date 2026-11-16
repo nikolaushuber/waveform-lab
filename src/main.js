@@ -7,6 +7,7 @@ import { init as initUiTabs } from './ui/tabs.js';
 import { init as initUiAxisControls } from './ui/axis-controls.js';
 import { init as initUiPagesAnalyze } from './ui/pages/analyze.js';
 import { init as initUiResizable } from './ui/resizable.js';
+import { startPython } from './engines/python.js';
 import { updateFreqRangeLabels } from './ui/axis-controls.js';
 import { renderClusterRows } from './ui/pages/cluster.js';
 import { drawCompareGraph, renderCompareRows, resetPreview } from './ui/pages/compare.js';
@@ -34,3 +35,7 @@ renderTapRows();
 renderClusterRows();
 renderFolderRows();
 restoreLibraries();
+
+// Start loading the Python analysis engine (Pyodide, in a Web Worker) right
+// away, so it's usually ready by the time Tap Analyser / Clustering run.
+startPython();

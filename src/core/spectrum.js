@@ -1,4 +1,4 @@
-import { fftInPlace } from './fft.js';
+import { bluesteinDFT, fftInPlace } from './fft.js';
 
 // Search forward from `startTimeSec` for the sample of greatest absolute
 // amplitude within the next `windowSec` seconds — the "loudest peak" for
@@ -124,4 +124,38 @@ export function octaveAverage(values, binHz, idx, fraction){
   let sum = 0;
   for (let j = lo; j <= hi; j++) sum += values[j];
   return sum / (hi - lo + 1);
+}
+
+// Hann window applied to a copy of `arr`.
+export function applyHann(arr){
+  const n = arr.length;
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++){
+    const w = n > 1 ? 0.5 - 0.5*Math.cos(2*Math.PI*i/(n-1)) : 1;
+    out[i] = arr[i]*w;
+  }
+  return out;
+}
+
+// Exact (unpadded) FFT magnitude spectrum, matching np.fft.rfft(data) bin-
+// for-bin. We used to zero-pad this to interpolate a smoother curve, but
+// that was wrong here: padding reveals extra fine-grained window-sidelobe
+// ripple between the coarser raw bins, which can register as *extra* local
+// maxima that don't exist as distinct samples in Python's coarser grid —
+// changing which peaks win the top-N-basis / top-5-common comparison.
+// Built on bluesteinDFT so M doesn't need to be a power of 2.
+export function computeFftMagExact(windowed, sr){
+  const M = windowed.length;
+  const zeros = new Float64Array(M);
+  const { re, im } = bluesteinDFT(windowed, zeros, false);
+  const half = Math.floor(M/2) + 1; // rfft length, same convention as np.fft.rfft
+  const freqs = new Float64Array(half);
+  const mags = new Float64Array(half);
+  for (let k = 0; k < half; k++){
+    freqs[k] = k*sr/M;
+    let mag = Math.hypot(re[k], im[k]) / M;
+    if (k > 0 && k < half-1) mag *= 2; // matches magnitude[1:-1] *= 2 in compute_fft_raw
+    mags[k] = mag;
+  }
+  return { freqs, mags, M };
 }
