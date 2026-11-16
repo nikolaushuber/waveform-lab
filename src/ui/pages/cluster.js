@@ -1,20 +1,10 @@
 import { S } from '../state.js';
-import { getBinEdgesRF } from '../../core/cluster/features.js';
-import { extractTapFeatures } from '../../core/cluster/pipeline.js';
-import { rfProximityClustering } from '../../core/ml/forest.js';
-import { kmeansClusterAutoK } from '../../core/ml/kmeans.js';
-import { adjustedRandScore } from '../../core/ml/metrics.js';
-import { sleep0 } from '../../core/util.js';
-import { ensurePyodideReady } from '../../engines/pyodide.js';
-import { clusterEngineNote, clusterEngineSelect, clusterFileCount, clusterResultsBody, clusterRows, clusterStatus, dropzoneCluster, el, fileInputCluster, runClusterBtn } from '../dom.js';
+import { toMono } from '../../core/mono.js';
+import { callPython, waitForPython } from '../../engines/python.js';
+import { clusterFileCount, clusterResultsBody, clusterRows, clusterStatus, dropzoneCluster, el, fileInputCluster, runClusterBtn } from '../dom.js';
 import { syncEntryToFolder } from '../folder-store.js';
 import { sortByName, uid } from '../format.js';
 import { drawWaveformOverview } from '../views/waveform.js';
-
-export const CLUSTER_ENGINE_NOTES = {
-  js: 'Runs the port of the algorithm in your browser — instant results, no internet needed.',
-  python: 'Runs your actual random_forest.py functions, unmodified, via a real Python (numpy/scipy/scikit-learn) build compiled to WebAssembly. First run downloads ~40MB and needs internet; cached after that.',
-};
 
 // ---------------- Clustering: file library (mirrors Tap Analyser's) ----------------
 export function addClusterFiles(fileArr){
@@ -143,11 +133,10 @@ export function renderClusterRows(){
 }
 
 // ---------------- Clustering: run pipeline ----------------
-// Mirrors build_dataset_unlabeled() + kmeans_cluster() + rf_proximity_clustering()
-// from random_forest.py: detect taps per file -> FFT-feature each tap
-// (fmax adjustable, default 1500 Hz; n_bins=64) -> KMeans/silhouette picks k
-// -> RF proximity clustering (primary) at that k -> adjusted Rand index vs. KMeans.
-export const CLUSTER_N_BINS = 64, CLUSTER_FMIN = 20;
+// Runs python/waveform_lab/clustering.py in the Python worker: detect taps per
+// file -> FFT-feature each tap (fmax adjustable, default 1500 Hz; 64 bins)
+// -> KMeans/silhouette picks k -> RF proximity clustering at that k ->
+// adjusted Rand index vs. KMeans.
 // Defaults match extract_window()'s pre_ms=5 and fft_features()/get_bin_edges()'s
 // implicit fmax=1500 usage from when this pipeline was first built — both are
 // now user-adjustable in Advanced settings, with a button to reset back to these.
@@ -168,13 +157,14 @@ export function getClusterOffsetFmax(){
   };
 }
 
+// Crop Start / Crop End as typed ('' = none) -> seconds >= 0.
+function cropSeconds(val){
+  const v = (val||'').trim();
+  const sec = v !== '' ? Math.max(0, parseFloat(v)) : 0;
+  return isFinite(sec) ? sec : 0;
+}
+
 export async function runClustering(){
-  const engine = el('clusterEngine').value;
-  if (engine === 'python') return runClusteringPython();
-  return runClusteringJS();
-}
-
-export async function runClusteringJS(){
   if (S.clusterRunning) return;
   if (!S.clusterLibrary.length){
     clusterStatus.textContent = 'Load at least one .wav file first.';
@@ -199,144 +189,48 @@ export async function runClusteringJS(){
   const { offsetSec, fmax } = getClusterOffsetFmax();
   const offsetMs = offsetSec * 1000;
 
-  const { X, meta, warnings, srUsed } = await extractTapFeatures(activeEntries,
-    { windowMs, minGapMs, offsetMs, fmax, nBins: CLUSTER_N_BINS, fmin: CLUSTER_FMIN },
-    (msg) => { clusterStatus.textContent = msg; });
-
-  if (X.length < 6){
+  const finish = (message, isError) => {
     S.clusterRunning = false;
     runClusterBtn.disabled = false;
-    clusterStatus.textContent = `Need at least 6 detected taps total to cluster meaningfully (got ${X.length}).`;
-    clusterStatus.classList.add('err');
-    return;
-  }
-
-  clusterStatus.textContent = `Determining k (KMeans + silhouette) across ${X.length} taps…`;
-  await sleep0();
-  const kmRes = kmeansClusterAutoK(X, forceK != null ? { k: forceK } : { kRange: [2,3,4,5,6,7,8] });
-  const k = kmRes.k;
-  if (k == null){
-    S.clusterRunning = false;
-    runClusterBtn.disabled = false;
-    clusterStatus.textContent = 'Could not determine a cluster count — try more taps or force a k.';
-    clusterStatus.classList.add('err');
-    return;
-  }
-
-  clusterStatus.textContent = `Running Random Forest proximity clustering (k=${k}, ${nEstimators} trees)…`;
-  await sleep0();
-  const rfRes = rfProximityClustering(X, k, { nEstimators, randomState: 42 });
-  await sleep0();
-
-  const agreement = adjustedRandScore(kmRes.labels, rfRes.labels);
-
-  S.clusterRunning = false;
-  runClusterBtn.disabled = false;
-  clusterStatus.textContent = warnings.length
-    ? `Done — ${X.length} taps, k=${k}, agreement=${agreement.toFixed(3)}. Notes: ${warnings.join(' · ')}`
-    : `Done — ${X.length} taps across ${activeEntries.length} file(s), k=${k}, agreement (adjusted Rand vs. KMeans)=${agreement.toFixed(3)}.`;
-
-  const edges = getBinEdgesRF(srUsed, CLUSTER_N_BINS, CLUSTER_FMIN, fmax);
-  renderClusterResults({ meta, rfLabels: rfRes.labels, importances: rfRes.importances, edges, k, agreement, fmax });
-}
-
-export async function runClusteringPython(){
-  if (S.clusterRunning) return;
-  if (!S.clusterLibrary.length){
-    clusterStatus.textContent = 'Load at least one .wav file first.';
-    clusterStatus.classList.add('err');
-    return;
-  }
-  const activeEntries = S.clusterLibrary.filter(e => e.included !== false);
-  if (!activeEntries.length){
-    clusterStatus.textContent = 'Tick at least one recording to analyse.';
-    clusterStatus.classList.add('err');
-    return;
-  }
-  S.clusterRunning = true;
-  runClusterBtn.disabled = true;
-  clusterStatus.classList.remove('err');
-
-  const windowMs = parseInt(el('clusterWindowMs').value, 10) || 120;
-  const nEstimators = Math.max(10, parseInt(el('clusterNTrees').value, 10) || 500);
-  const minGapMs = (parseFloat(el('clusterMinGap').value) || 0.15) * 1000;
-  const forceKRaw = el('clusterForceK').value.trim();
-  const forceK = forceKRaw !== '' ? Math.max(2, parseInt(forceKRaw, 10)) : null;
-  const { offsetSec, fmax } = getClusterOffsetFmax();
-  const offsetMs = offsetSec * 1000;
+    clusterStatus.textContent = message;
+    clusterStatus.classList.toggle('err', !!isError);
+  };
 
   try{
-    const pyodide = await ensurePyodideReady((msg) => { clusterStatus.textContent = msg; });
-
-    clusterStatus.textContent = `Decoding ${activeEntries.length} file(s)…`;
-    await sleep0();
-
-    const filesData = [];
-    for (const entry of activeEntries){
-      const audioBuffer = entry.audioBuffer;
-      const sr = audioBuffer.sampleRate;
-      const nCh = audioBuffer.numberOfChannels;
-      let samples;
-      if (nCh === 1){
-        samples = audioBuffer.getChannelData(0);
-      } else {
-        const n = audioBuffer.length;
-        const mixed = new Float32Array(n);
-        for (let c = 0; c < nCh; c++){
-          const ch = audioBuffer.getChannelData(c);
-          for (let i = 0; i < n; i++) mixed[i] += ch[i]/nCh;
-        }
-        samples = mixed;
-      }
-      const cropStartVal = (entry.cropStart||'').trim();
-      const cropEndVal = (entry.cropEnd||'').trim();
-      filesData.push({
-        name: entry.name,
-        sr,
-        samples: Array.from(samples),
-        cropStart: cropStartVal !== '' ? parseFloat(cropStartVal) : 0,
-        cropEnd: cropEndVal !== '' ? parseFloat(cropEndVal) : 0,
-      });
-      await sleep0();
-    }
-
-    clusterStatus.textContent = `Running the real Python pipeline (k=${forceK != null ? forceK : 'auto'}, ${nEstimators} trees)… this can take a while.`;
-    await sleep0();
-
-    const bridge = pyodide.globals.get('run_clustering_bridge');
-    const payload = {
-      files: filesData, windowMs, nEstimators, forceK, minGapMs, randomState: 42,
-      offsetMs, fmax,
-    };
-    const resultJson = bridge(JSON.stringify(payload));
-    bridge.destroy();
-    const result = JSON.parse(resultJson);
-
-    S.clusterRunning = false;
-    runClusterBtn.disabled = false;
-
-    if (result.error){
-      clusterStatus.textContent = result.error;
-      clusterStatus.classList.add('err');
-      return;
-    }
-
-    const warnings = result.warnings || [];
-    clusterStatus.textContent = warnings.length
-      ? `Done (Python) — ${result.nTaps} taps, k=${result.k}, agreement=${result.agreement.toFixed(3)}. Notes: ${warnings.join(' · ')}`
-      : `Done (Python) — ${result.nTaps} taps across ${result.nFiles} file(s), k=${result.k}, agreement (adjusted Rand vs. KMeans)=${result.agreement.toFixed(3)}.`;
-
-    renderClusterResults({
-      meta: result.meta, rfLabels: result.rfLabels, importances: result.importances,
-      edges: result.edges, k: result.k, agreement: result.agreement, fmax,
-    });
+    await waitForPython((msg) => { clusterStatus.textContent = msg; });
   }catch(err){
-    console.error('Pyodide clustering failed', err);
-    S.clusterRunning = false;
-    runClusterBtn.disabled = false;
-    clusterStatus.textContent = `Python engine failed: ${err.message || err}. Check your internet connection, or switch back to the JavaScript engine above.`;
-    clusterStatus.classList.add('err');
+    console.error('Python failed to load', err);
+    finish(`Couldn't load the Python analysis engine (${err.message}). It needs an internet connection the first time.`, true);
+    return;
   }
+
+  clusterStatus.textContent = `Clustering taps in ${activeEntries.length} file(s) (${nEstimators} trees)…`;
+  let result;
+  try{
+    const files = activeEntries.map(e => ({
+      name: e.name, sr: e.audioBuffer.sampleRate,
+      cropStart: cropSeconds(e.cropStart), cropEnd: cropSeconds(e.cropEnd),
+    }));
+    result = await callPython('run_clustering',
+      { files, windowMs, nEstimators, forceK, minGapMs, offsetMs, fmax },
+      activeEntries.map(e => toMono(e.audioBuffer)));
+  }catch(err){
+    console.error('Clustering failed', err);
+    finish(`Clustering failed: ${err.message}`, true);
+    return;
+  }
+
+  if (result.error){
+    finish(result.error, true);
+    return;
+  }
+
+  const { k, agreement, warnings } = result;
+  finish(warnings.length
+    ? `Done — ${result.nTaps} taps, k=${k}, agreement=${agreement.toFixed(3)}. Notes: ${warnings.join(' · ')}`
+    : `Done — ${result.nTaps} taps across ${activeEntries.length} file(s), k=${k}, agreement (adjusted Rand vs. KMeans)=${agreement.toFixed(3)}.`);
+
+  renderClusterResults({ meta: result.meta, rfLabels: result.rfLabels, importances: result.importances, edges: result.edges, k, agreement, fmax });
 }
 
 export function renderClusterResults(res){
@@ -407,10 +301,6 @@ export function renderClusterResults(res){
 
 // Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
-  clusterEngineSelect.addEventListener('change', () => {
-    clusterEngineNote.textContent = CLUSTER_ENGINE_NOTES[clusterEngineSelect.value] || '';
-  });
-
   fileInputCluster.addEventListener('change', (e) => addClusterFiles(e.target.files));
   ;['dragover','dragenter'].forEach(evtName => {
     dropzoneCluster.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneCluster.classList.add('drag'); });

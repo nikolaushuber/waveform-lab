@@ -41,12 +41,14 @@ test('compare: two snapshots give two traces', async ({ page }) => {
 });
 
 test('tap analyser: run analysis on the fixture recordings', async ({ page }) => {
+  test.setTimeout(150_000);
   const errors = await openApp(page);
   await gotoTab(page, 'tap');
   await page.locator('#fileInputTap').setInputFiles(fixtureFiles());
   await expect(page.locator('#tapFileCount')).toContainText(`${recordings.length} loaded`);
   await page.locator('#runTapBtn').click();
-  await expect(page.locator('#tapStatus')).toContainText('Done', { timeout: 60_000 });
+  // First run includes loading Pyodide in the worker.
+  await expect(page.locator('#tapStatus')).toContainText('Done', { timeout: 120_000 });
   const results = page.locator('#tapResultsBody');
   await expect(results.locator('.variance-block')).toHaveCount(recordings.length);
   // Planted partials show up (browser resamples to the device rate, so allow ±2 Hz).
@@ -57,13 +59,14 @@ test('tap analyser: run analysis on the fixture recordings', async ({ page }) =>
   expect(errors).toEqual([]);
 });
 
-test('clustering (JavaScript engine): separates the two materials', async ({ page }) => {
+test('clustering: separates the two materials', async ({ page }) => {
+  test.setTimeout(150_000);
   const errors = await openApp(page);
   await gotoTab(page, 'cluster');
   await page.locator('#fileInputCluster').setInputFiles(fixtureFiles());
   await expect(page.locator('#clusterFileCount')).toContainText(`${recordings.length} loaded`);
   await page.locator('#runClusterBtn').click();
-  await expect(page.locator('#clusterStatus')).toContainText('Done', { timeout: 60_000 });
+  await expect(page.locator('#clusterStatus')).toContainText('Done', { timeout: 120_000 });
   const results = page.locator('#clusterResultsBody');
   await expect(results).toContainText('Chosen k = 2');
   await expect(results).toContainText('Per-file cluster breakdown');
@@ -105,16 +108,4 @@ test('file folder: crop settings persist across reloads and load into the Tap An
   await expect(page.locator('#tapFileCount')).toContainText('1 loaded');
   await expect(page.locator('#tapRows .tr-fields input[type="number"]').first()).toHaveValue('0.4');
   expect(errors).toEqual([]);
-});
-
-test('clustering (Pyodide engine) runs real scikit-learn', async ({ page }) => {
-  test.skip(!process.env.E2E_PYODIDE, 'set E2E_PYODIDE=1 to run (downloads ~40 MB)');
-  test.setTimeout(300_000);
-  await openApp(page);
-  await gotoTab(page, 'cluster');
-  await page.locator('#fileInputCluster').setInputFiles(fixtureFiles());
-  await page.locator('#clusterEngine').selectOption('python');
-  await page.locator('#runClusterBtn').click();
-  await expect(page.locator('#clusterStatus')).toContainText('Done', { timeout: 280_000 });
-  await expect(page.locator('#clusterResultsBody')).toContainText('Chosen k =');
 });

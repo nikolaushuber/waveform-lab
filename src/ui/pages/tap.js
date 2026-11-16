@@ -1,6 +1,6 @@
 import { S } from '../state.js';
-import { analyseTapFile } from '../../core/tap/analyse.js';
-import { sleep0 } from '../../core/util.js';
+import { toMono } from '../../core/mono.js';
+import { callPython, waitForPython } from '../../engines/python.js';
 import { dropzoneTap, el, fileInputTap, runTapBtn, scatterCanvas, scatterLegend, scatterTooltip, tapFileCount, tapFreqRangeLabel, tapMetricNote, tapMetricSelect, tapResultsBody, tapRows, tapStatus, tapTopNSelect } from '../dom.js';
 import { syncEntryToFolder } from '../folder-store.js';
 import { sortByName, uid } from '../format.js';
@@ -169,14 +169,29 @@ export async function runTapAnalysis(){
     useEnergy:  el('tapMetric').value === 'energy',
   };
 
+  try{
+    await waitForPython((msg) => { tapStatus.textContent = msg; });
+  }catch(err){
+    console.error('Python failed to load', err);
+    tapRunning = false;
+    runTapBtn.disabled = false;
+    tapStatus.textContent = `Couldn't load the Python analysis engine (${err.message}). It needs an internet connection the first time.`;
+    tapStatus.classList.add('err');
+    return;
+  }
+
   const fileSummaries = [];
   const errors = [];
   for (let i = 0; i < activeEntries.length; i++){
     const entry = activeEntries[i];
     tapStatus.textContent = `Analysing ${i+1}/${activeEntries.length}: ${entry.name}…`;
-    await sleep0();
     try{
-      fileSummaries.push(await analyseTapFile(entry, opts));
+      const { audioBuffer } = entry;
+      const res = await callPython('run_tap_analysis',
+        { sr: audioBuffer.sampleRate, skipStart: entry.skipStart || '', skipEnd: entry.skipEnd || '', opts },
+        [toMono(audioBuffer)]);
+      if (res.error) errors.push(`${entry.name} (${res.error})`);
+      else fileSummaries.push({ label: entry.name, ...res });
     }catch(err){
       console.error(err);
       errors.push(`${entry.name} (${err.message})`);

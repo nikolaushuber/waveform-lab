@@ -54,8 +54,6 @@ export const clusterFileCount = el('clusterFileCount');
 export const runClusterBtn = el('runClusterBtn');
 export const clusterStatus = el('clusterStatus');
 export const clusterResultsBody = el('clusterResultsBody');
-export const clusterEngineSelect = el('clusterEngine');
-export const clusterEngineNote = el('clusterEngineNote');
 
 // File Folder page state
 export const dropzoneFolder = el('dropzoneFolder');
