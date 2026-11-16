@@ -1,5 +1,7 @@
 import json
 
+from sklearn.metrics import adjusted_rand_score
+
 from fixtures import CLUSTER_DEFAULTS as C, SR, TAP_DEFAULTS, load_golden, recordings
 from waveform_lab import bridge
 
@@ -23,4 +25,5 @@ def test_run_clustering_round_trip():
                "windowMs": C["windowMs"], "nEstimators": C["nEstimators"], "forceK": None,
                "minGapMs": C["minGapMs"], "offsetMs": C["offsetSec"] * 1000, "fmax": C["fmax"]}
     res = json.loads(bridge.run_clustering(json.dumps(payload), [s for _, s in recs]))
-    assert res["k"] == 2 and res["rfLabels"] == load_golden("clustering-py")["rfLabels"]
+    assert res["k"] == 2
+    assert adjusted_rand_score(res["rfLabels"], load_golden("clustering-py")["rfLabels"]) == 1.0

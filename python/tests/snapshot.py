@@ -36,10 +36,15 @@ def _close(a, b, path="$"):
         assert a == b, f"{path}: {a!r} != {b!r}"
 
 
-def match_golden(name, value):
+def match_golden(name, value, loose=()):
+    """Compare `value` with the stored golden file and return the stored
+    data. Top-level keys in `loose` are written but not compared here — for
+    platform-sensitive values the caller checks with its own tolerance."""
     path = GOLDEN / f"{name}.json"
     value = _round(value)
     if os.environ.get("UPDATE_GOLDEN") or not path.exists():
         path.write_text(json.dumps(value, indent=1, ensure_ascii=False) + "\n")
-        return
-    _close(value, json.loads(path.read_text()))
+        return value
+    stored = json.loads(path.read_text())
+    _close({k: v for k, v in value.items() if k not in loose}, {k: v for k, v in stored.items() if k not in loose})
+    return stored

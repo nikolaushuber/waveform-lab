@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { encodeWav } from '../helpers/wav.js';
 import { SR, recordings } from '../helpers/fixtures.js';
@@ -24,17 +24,27 @@ async function cachePyodide(context) {
   mkdirSync(PYODIDE_CACHE, { recursive: true });
   await context.route(/^https:\/\/cdn\.jsdelivr\.net\/pyodide\//, async (route) => {
     const key = join(PYODIDE_CACHE, createHash('sha1').update(route.request().url()).digest('hex'));
-    if (existsSync(key)) {
-      const { contentType } = JSON.parse(readFileSync(key + '.json', 'utf8'));
-      return route.fulfill({ status: 200, contentType, headers: { 'access-control-allow-origin': '*' }, body: readFileSync(key) });
+    try {
+      if (existsSync(key)) {
+        const { contentType } = JSON.parse(readFileSync(key + '.json', 'utf8'));
+        return await route.fulfill({ status: 200, contentType, headers: { 'access-control-allow-origin': '*' }, body: readFileSync(key) });
+      }
+      const response = await route.fetch();
+      const body = await response.body();
+      if (response.ok()) {
+        // Metadata first, then the body via rename: a parallel test never
+        // sees a half-written file.
+        writeFileSync(key + '.json', JSON.stringify({ contentType: response.headers()['content-type'] }));
+        const tmp = `${key}.${process.pid}.tmp`;
+        writeFileSync(tmp, body);
+        renameSync(tmp, key);
+      }
+      await route.fulfill({ response, body });
+    } catch (err) {
+      // The page starts loading Pyodide on open, so short tests often end
+      // mid-download; nothing is waiting for the response any more.
+      if (!/Test ended|closed/i.test(String(err?.message))) throw err;
     }
-    const response = await route.fetch();
-    const body = await response.body();
-    if (response.ok()) {
-      writeFileSync(key, body);
-      writeFileSync(key + '.json', JSON.stringify({ contentType: response.headers()['content-type'] }));
-    }
-    return route.fulfill({ response, body });
   });
 }
 

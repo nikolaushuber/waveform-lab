@@ -61,7 +61,14 @@ def test_run_clustering_golden():
     res = cl.run_clustering(FILES, window_ms=C["windowMs"], n_estimators=C["nEstimators"],
                             min_gap_ms=C["minGapMs"], offset_ms=C["offsetSec"] * 1000, fmax=C["fmax"])
     assert res["k"] == 2 and res["agreement"] == 1.0 and res["nTaps"] == len(JS["meta"])
-    match_golden("clustering-py", res)
+    # The Random Forest is sensitive to last-bit floating-point differences
+    # between platforms (macOS/ARM, Linux/x86, Pyodide/WebAssembly): its
+    # importances drift by ~1% and cluster numbering may swap. Check those
+    # loosely; everything else must match exactly.
+    stored = match_golden("clustering-py", res, loose=("importances", "rfLabels"))
+    assert adjusted_rand_score(res["rfLabels"], stored["rfLabels"]) == 1.0
+    assert sum(res["importances"]) == pytest.approx(1)
+    np.testing.assert_allclose(res["importances"], stored["importances"], atol=0.005)
 
 
 def test_run_clustering_errors():
