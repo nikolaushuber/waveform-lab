@@ -1,0 +1,5119 @@
+(() => {
+  "use strict";
+
+  // ---------------- State ----------------
+  let library = [];          // {id, name, size, url, audioBuffer, wavInfo}
+  let activeId = null;
+  let folderLibrary = [];    // shared local File Folder: {id, name, size, audioBuffer, skipStart:'', skipEnd:'', folderId:null, _rawBuffer}
+  let folderGroups = [];     // named folders within the File Folder tab: {id, name}
+  let audioEl = null;
+  let audioCtx = null;
+  let sourceNode = null;
+  let analyser = null;
+  let rafId = null;
+  let isPlaying = false;
+  let lastCapture = null;    // {time, freqs, mags, peaks, rms, sampleRate}
+  let cursorFreq = null;     // user-draggable readout line on the frozen graph
+  let draggingCursor = false;
+  let waveDragging = false;
+  let captureScheduled = false;
+  let pendingCaptureEntry = null;
+  let pendingCaptureTime = null;
+
+  // Compare page state
+  const TRACE_COLOURS = ['#0f8a4c','#b5690a','#2f6fb0','#a02b9e','#c23b2e','#0a8a8a','#8a7a00','#555550'];
+  let compareTraces = [];    // {id, color, entryName, time, capture}
+  let compareIdSeq = 0;
+  let compareCursorFreq = null;
+  let draggingCompareCursor = false;
+  let draggingTraceId = null;
+  let dragStartClientY = 0;
+  let dragStartOffset = 0;
+  let previewScheduled = false;
+  let pendingPreviewEntry = null;
+  let pendingPreviewTime = null;
+  let lastPreviewCapture = null;
+
+  const el = (id) => document.getElementById(id);
+  const fileInput = el('fileInput');
+  const dropzone = el('dropzone');
+  const fileList = el('fileList');
+  const fileCount = el('fileCount');
+  const nowPlayingLabel = el('nowPlayingLabel');
+  const playBtn = el('playBtn');
+  const stopBtn = el('stopBtn');
+  const curTimeEl = el('curTime');
+  const durTimeEl = el('durTime');
+  const scrub = el('scrub');
+  const waveCanvas = el('waveCanvas');
+  const sampleOffsetInput = el('sampleOffset');
+  const sampleBtn = el('sampleBtn');
+  const fftCanvas = el('fftCanvas');
+  const screenBadge = el('screenBadge');
+  const screenStamp = el('screenStamp');
+  const sheetBody = el('sheetBody');
+  const sheetSub = el('sheetSub');
+  const exportBtn = el('exportBtn');
+
+  const fileInputCompare = el('fileInputCompare');
+  const dropzoneCompare = el('dropzoneCompare');
+  const compareFileCount = el('compareFileCount');
+  const compareRows = el('compareRows');
+  const compareCanvas = el('compareCanvas');
+  const compareLegend = el('compareLegend');
+  const compareCursorInfo = el('compareCursorInfo');
+  const clearCompareBtn = el('clearCompareBtn');
+  const previewCanvas = el('previewCanvas');
+  const previewLabel = el('previewLabel');
+
+  // Tap analyser page
+  const fileInputTap = el('fileInputTap');
+  const dropzoneTap = el('dropzoneTap');
+  const tapFileCount = el('tapFileCount');
+  const tapRows = el('tapRows');
+  const runTapBtn = el('runTapBtn');
+  const tapStatus = el('tapStatus');
+  const scatterCanvas = el('scatterCanvas');
+  const scatterLegend = el('scatterLegend');
+  const scatterTooltip = el('scatterTooltip');
+  const tapResultsBody = el('tapResultsBody');
+  const tapTopNSelect = el('tapTopNSelect');
+  const tapFreqRangeLabel = el('tapFreqRangeLabel');
+  const tapMetricSelect = el('tapMetric');
+  const tapMetricNote = el('tapMetricNote');
+  const TAP_METRIC_NOTES = {
+    magnitude: 'Peaks are found and normalised by linear FFT magnitude — the original behaviour.',
+    energy: 'Peaks are ranked by normalised energy (energy ÷ −3dB bandwidth) — rewards sharp, well-defined resonances over broad, diffuse ones of equal energy (multi_energy.py).',
+  };
+  tapMetricSelect.addEventListener('change', () => {
+    tapMetricNote.textContent = TAP_METRIC_NOTES[tapMetricSelect.value] || '';
+  });
+  let tapLibrary = [];      // {id, name, size, audioBuffer, skipStart:'', skipEnd:'', included, _rawBuffer}
+  let tapRunning = false;
+  let lastTapFileSummaries = null; // cached results, so "Show top" can re-slice without re-running analysis
+  let scatterPoints = [];   // {cx, cy, color, label, freq, avgPct, ...} — hit-testable dots on the scatter graph
+  let tapHiddenLabels = new Set(); // file labels toggled off (click a legend name) — hidden from the scatter graph only
+
+  // Clustering page state
+  const dropzoneCluster = el('dropzoneCluster');
+  const fileInputCluster = el('fileInputCluster');
+  const clusterRows = el('clusterRows');
+  const clusterFileCount = el('clusterFileCount');
+  const runClusterBtn = el('runClusterBtn');
+  const clusterStatus = el('clusterStatus');
+  const clusterResultsBody = el('clusterResultsBody');
+  const clusterEngineSelect = el('clusterEngine');
+  const clusterEngineNote = el('clusterEngineNote');
+  let clusterLibrary = [];  // {id, name, size, audioBuffer, cropStart:'', cropEnd:'', included, _rawBuffer}
+  let clusterRunning = false;
+
+  const CLUSTER_ENGINE_NOTES = {
+    js: 'Runs the port of the algorithm in your browser — instant results, no internet needed.',
+    python: 'Runs your actual random_forest.py functions, unmodified, via a real Python (numpy/scipy/scikit-learn) build compiled to WebAssembly. First run downloads ~40MB and needs internet; cached after that.',
+  };
+  clusterEngineSelect.addEventListener('change', () => {
+    clusterEngineNote.textContent = CLUSTER_ENGINE_NOTES[clusterEngineSelect.value] || '';
+  });
+
+  // File Folder page state
+  const dropzoneFolder = el('dropzoneFolder');
+  const fileInputFolder = el('fileInputFolder');
+  const folderDirInput = el('folderDirInput');
+  const dropzoneFolderMenu = el('dropzoneFolderMenu');
+  const dzChooseFiles = el('dzChooseFiles');
+  const dzChooseFolder = el('dzChooseFolder');
+  const folderRows = el('folderRows');
+  const folderFileCount = el('folderFileCount');
+  const folderSearchInput = el('folderSearchInput');
+  const folderNewFolderBtn = el('folderNewFolderBtn');
+  const folderCrumbs = el('folderCrumbs');
+  let folderSearchQuery = '';
+  let folderExpandedIds = new Set(); // rows the user has clicked open, to show crop controls + summary FFT
+  let currentFolderGroupId = null;   // null = root of the File Folder ("Files" not in any folder)
+  let folderMenuOpen = null;         // {kind:'file'|'folder', id, mode:'main'|'move'} — the one open ⋮ menu
+  let folderRenaming = null;         // {kind:'file'|'folder', id} — the one row mid-rename
+  let addingFolderGroup = false;     // true while the inline "new folder" name input is showing
+
+  // "Load from local folder" buttons next to each tool's dropzone
+  const loadFromFolderBtnAnalyze = el('loadFromFolderBtnAnalyze');
+  const loadFromFolderBtnCompare = el('loadFromFolderBtnCompare');
+  const loadFromFolderBtnTap = el('loadFromFolderBtnTap');
+  const loadFromFolderBtnCluster = el('loadFromFolderBtnCluster');
+
+  // ---------------- Persistence (IndexedDB) ----------------
+  // A single shared "File Folder" (fileFolder store) is now the only place
+  // files + their Crop Start / Crop End get saved locally. Each of the four
+  // tools (Waveform Lab, Compare, Tap Analyser, Clustering) is session-only
+  // for files picked straight from your computer; loading from the folder
+  // instead brings along its saved skip times. `library`/`tapLibrary`/
+  // `clusterLibrary` are legacy stores kept only so existing saved files
+  // can be migrated into `fileFolder` the first time a returning user's DB
+  // gets upgraded — nothing writes to them any more.
+  const DB_NAME = 'waveform-lab-db';
+  const DB_VERSION = 4;
+  let dbPromise = null;
+
+  function openDB(){
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      if (!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = (event) => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('library')) db.createObjectStore('library', {keyPath:'id'});
+        if (!db.objectStoreNames.contains('tapLibrary')) db.createObjectStore('tapLibrary', {keyPath:'id'});
+        if (!db.objectStoreNames.contains('clusterLibrary')) db.createObjectStore('clusterLibrary', {keyPath:'id'});
+        const hadFolder = db.objectStoreNames.contains('fileFolder');
+        if (!hadFolder) db.createObjectStore('fileFolder', {keyPath:'id'});
+        // v4: named folders within the File Folder tab, for grouping files.
+        // A file's membership lives on its own fileFolder record (folderId),
+        // this store just holds the folder names themselves.
+        if (!db.objectStoreNames.contains('fileFolderGroups')) db.createObjectStore('fileFolderGroups', {keyPath:'id'});
+
+        // One-time migration: fold any files already saved under the old
+        // per-section stores into the new shared folder, so upgrading
+        // doesn't lose anything a returning user had saved. Runs inside the
+        // same versionchange transaction as the store creation above.
+        if (!hadFolder){
+          const tx = event.target.transaction;
+          const folderStore = tx.objectStore('fileFolder');
+          const seen = new Set();
+          const mergeFrom = (storeName, mapFields) => {
+            if (!db.objectStoreNames.contains(storeName)) return;
+            const src = tx.objectStore(storeName);
+            src.openCursor().onsuccess = (ev) => {
+              const cursor = ev.target.result;
+              if (!cursor) return;
+              const rec = cursor.value;
+              if (!seen.has(rec.id)){
+                seen.add(rec.id);
+                folderStore.put(mapFields(rec));
+              }
+              cursor.continue();
+            };
+          };
+          mergeFrom('tapLibrary', rec => ({ id: rec.id, name: rec.name, size: rec.size, arrayBuffer: rec.arrayBuffer, skipStart: rec.skipStart || '', skipEnd: rec.skipEnd || '' }));
+          mergeFrom('clusterLibrary', rec => ({ id: rec.id, name: rec.name, size: rec.size, arrayBuffer: rec.arrayBuffer, skipStart: rec.cropStart || '', skipEnd: rec.cropEnd || '' }));
+          mergeFrom('library', rec => ({ id: rec.id, name: rec.name, size: rec.size, arrayBuffer: rec.arrayBuffer, skipStart: '', skipEnd: '' }));
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+
+  async function idbPut(storeName, record){
+    try{
+      const db = await openDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).put(record);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }catch(err){ console.warn('Could not save to local storage', err); }
+  }
+
+  async function idbDelete(storeName, id){
+    try{
+      const db = await openDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).delete(id);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }catch(err){ console.warn('Could not remove from local storage', err); }
+  }
+
+  async function idbGetAll(storeName){
+    try{
+      const db = await openDB();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }catch(err){ console.warn('Could not read from local storage', err); return []; }
+  }
+
+  // Saves/updates one file in the shared local File Folder (name, size, raw
+  // bytes, Crop Start / Crop End). This is the only place file data gets
+  // persisted now — Waveform Lab, Compare, Tap Analyser and Clustering no
+  // longer save their working lists themselves.
+  function persistFolderEntry(entry){
+    idbPut('fileFolder', {
+      id: entry.id, name: entry.name, size: entry.size,
+      skipStart: entry.skipStart, skipEnd: entry.skipEnd,
+      folderId: entry.folderId || null,
+      arrayBuffer: entry._rawBuffer
+    });
+  }
+
+  // Named folders within the File Folder tab, for grouping files. A file's
+  // membership lives on its own fileFolder record (folderId); this store
+  // just holds the folder names themselves.
+  function persistFolderGroup(group){
+    idbPut('fileFolderGroups', { id: group.id, name: group.name });
+  }
+
+  // When a Tap Analyser / Clustering row that was loaded from the shared
+  // folder (entry._folderSynced) has its skip/crop times edited, mirror
+  // those times back onto the matching folder entry and save them — so the
+  // folder always reflects the latest times, wherever they were last set.
+  // Files picked ad hoc from your computer (no matching folder entry) are
+  // left alone; nothing gets persisted for them.
+  function syncEntryToFolder(entry, startField, endField){
+    if (!entry._folderSynced) return;
+    const rec = folderLibrary.find(f => f.id === entry.id);
+    if (!rec) return;
+    rec.skipStart = entry[startField];
+    rec.skipEnd = entry[endField];
+    persistFolderEntry(rec);
+  }
+
+  // ---------------- Utils ----------------
+  function fmtTime(t){
+    if (!isFinite(t) || t < 0) t = 0;
+    const m = Math.floor(t/60);
+    const s = t - m*60;
+    return `${m}:${s.toFixed(3).padStart(6,'0')}`;
+  }
+  function fmtBytes(n){
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/1024/1024).toFixed(2) + ' MB';
+  }
+  function fmtHz(f){
+    if (f >= 1000) return (f/1000).toFixed(2) + ' kHz';
+    return f.toFixed(1) + ' Hz';
+  }
+  function uid(){ return Math.random().toString(36).slice(2,10); }
+
+  // Keeps a file library sorted alphabetically (naturally, so "file2" sorts
+  // before "file10") by name — used whenever a list is loaded or restored.
+  function sortByName(arr){
+    arr.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true, sensitivity:'base'}));
+  }
+
+  // ---------------- WAV header parse (best-effort) ----------------
+  function parseWavHeader(buf){
+    try{
+      const dv = new DataView(buf);
+      if (dv.getUint32(0,false) !== 0x52494646) return null; // "RIFF"
+      let offset = 12;
+      let fmt = null;
+      while (offset < dv.byteLength - 8){
+        const id = String.fromCharCode(dv.getUint8(offset),dv.getUint8(offset+1),dv.getUint8(offset+2),dv.getUint8(offset+3));
+        const size = dv.getUint32(offset+4,true);
+        if (id === 'fmt '){
+          fmt = {
+            audioFormat: dv.getUint16(offset+8,true),
+            numChannels: dv.getUint16(offset+10,true),
+            sampleRate: dv.getUint32(offset+12,true),
+            byteRate: dv.getUint32(offset+16,true),
+            blockAlign: dv.getUint16(offset+20,true),
+            bitsPerSample: dv.getUint16(offset+22,true),
+          };
+          break;
+        }
+        offset += 8 + size + (size % 2);
+      }
+      return fmt;
+    }catch(e){ return null; }
+  }
+
+  // ---------------- FFT (radix-2 Cooley-Tukey, in place) ----------------
+  function fftInPlace(re, im){
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++){
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j){
+        [re[i],re[j]] = [re[j],re[i]];
+        [im[i],im[j]] = [im[j],im[i]];
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1){
+      const ang = -2*Math.PI/len;
+      const wr0 = Math.cos(ang), wi0 = Math.sin(ang);
+      for (let i = 0; i < n; i += len){
+        let curWr = 1, curWi = 0;
+        for (let j = 0; j < len/2; j++){
+          const ur = re[i+j], ui = im[i+j];
+          const vr = re[i+j+len/2]*curWr - im[i+j+len/2]*curWi;
+          const vi = re[i+j+len/2]*curWi + im[i+j+len/2]*curWr;
+          re[i+j] = ur+vr; im[i+j] = ui+vi;
+          re[i+j+len/2] = ur-vr; im[i+j+len/2] = ui-vi;
+          const nwr = curWr*wr0 - curWi*wi0;
+          const nwi = curWr*wi0 + curWi*wr0;
+          curWr = nwr; curWi = nwi;
+        }
+      }
+    }
+  }
+
+  function nextPow2(n){ let p = 1; while (p < n) p <<= 1; return p; }
+
+  // Search forward from `startTimeSec` for the sample of greatest absolute
+  // amplitude within the next `windowSec` seconds — the "loudest peak" for
+  // the Sample control. Used to jump from a rough manual marker (dropped
+  // somewhere before a tap) to that tap's actual attack.
+  function findLoudestPeakForward(audioBuffer, startTimeSec, windowSec){
+    const sr = audioBuffer.sampleRate;
+    const nCh = audioBuffer.numberOfChannels;
+    const chans = [];
+    for (let c = 0; c < nCh; c++) chans.push(audioBuffer.getChannelData(c));
+    const total = audioBuffer.length;
+    const startIdx = Math.min(total-1, Math.max(0, Math.round(startTimeSec*sr)));
+    const endIdx = Math.min(total, startIdx + Math.max(1, Math.round(windowSec*sr)));
+    let bestI = startIdx, bestV = -Infinity;
+    for (let i = startIdx; i < endIdx; i++){
+      let sum = 0;
+      for (let c = 0; c < nCh; c++) sum += chans[c][i];
+      const v = Math.abs(sum/nCh);
+      if (v > bestV){ bestV = v; bestI = i; }
+    }
+    return bestI / sr;
+  }
+
+  // ---------------- Tap Analyser DSP (client-side port of multi_variance.py / tap_scatter.py) ----------------
+  function sleep0(){ return new Promise(r => setTimeout(r, 0)); }
+
+  function ifftInPlace(re, im){
+    const n = re.length;
+    for (let i = 0; i < n; i++) im[i] = -im[i];
+    fftInPlace(re, im);
+    for (let i = 0; i < n; i++){ re[i] = re[i]/n; im[i] = -im[i]/n; }
+  }
+
+  // Arbitrary-length DFT via Bluestein's algorithm (chirp z-transform), built
+  // on the power-of-2 fftInPlace/ifftInPlace above. Needed because the Hilbert
+  // transform (used for the envelope) is a broadband, all-pass phase operation
+  // tied to the *exact* signal length — unlike a plain magnitude spectrum,
+  // zero-padding it before the FFT changes the result almost everywhere, not
+  // just at the edges. scipy.signal.hilbert(x) uses N = len(x) exactly, so we
+  // need to do the same instead of rounding up to the next power of 2.
+  function bluesteinDFT(reIn, imIn, inverse){
+    const n = reIn.length;
+    if ((n & (n-1)) === 0){
+      // already a power of 2 (or 0/1) — use the fast path directly
+      const re = Float64Array.from(reIn), im = Float64Array.from(imIn);
+      if (n > 1){ if (inverse) ifftInPlace(re, im); else fftInPlace(re, im); }
+      return { re, im };
+    }
+
+    const sign = inverse ? 1 : -1; // exp(sign * i*pi*k^2/n)
+    const cosT = new Float64Array(n), sinT = new Float64Array(n);
+    for (let k = 0; k < n; k++){
+      const kk = (k*k) % (2*n); // keep the argument small for float precision
+      const ang = sign * Math.PI * kk / n;
+      cosT[k] = Math.cos(ang);
+      sinT[k] = Math.sin(ang);
+    }
+
+    const M = nextPow2(2*n - 1);
+    const aRe = new Float64Array(M), aIm = new Float64Array(M);
+    for (let k = 0; k < n; k++){
+      aRe[k] = reIn[k]*cosT[k] - imIn[k]*sinT[k];
+      aIm[k] = reIn[k]*sinT[k] + imIn[k]*cosT[k];
+    }
+
+    const bRe = new Float64Array(M), bIm = new Float64Array(M);
+    bRe[0] = cosT[0]; bIm[0] = -sinT[0];
+    for (let k = 1; k < n; k++){
+      bRe[k] = cosT[k]; bIm[k] = -sinT[k];
+      bRe[M-k] = cosT[k]; bIm[M-k] = -sinT[k];
+    }
+
+    fftInPlace(aRe, aIm);
+    fftInPlace(bRe, bIm);
+    for (let k = 0; k < M; k++){
+      const r = aRe[k]*bRe[k] - aIm[k]*bIm[k];
+      const i = aRe[k]*bIm[k] + aIm[k]*bRe[k];
+      aRe[k] = r; aIm[k] = i;
+    }
+    ifftInPlace(aRe, aIm);
+
+    const outRe = new Float64Array(n), outIm = new Float64Array(n);
+    for (let k = 0; k < n; k++){
+      outRe[k] = aRe[k]*cosT[k] - aIm[k]*sinT[k];
+      outIm[k] = aRe[k]*sinT[k] + aIm[k]*cosT[k];
+    }
+    if (inverse){
+      for (let k = 0; k < n; k++){ outRe[k] /= n; outIm[k] /= n; }
+    }
+    return { re: outRe, im: outIm };
+  }
+
+  // ---------------- Clustering DSP/ML (client-side port of random_forest.py) ----------------
+  // Every function below was ported from random_forest.py and cross-checked
+  // numerically against the real Python (numpy/scipy/scikit-learn) pipeline
+  // before being wired in here — see the standalone validation scripts used
+  // during development for the exact diffs. Uses the fftInPlace/ifftInPlace/
+  // bluesteinDFT/nextPow2 already defined above.
+
+  // rfft magnitude spectrum matching np.fft.rfft(x) magnitude bin-for-bin
+  function rfftMag(signal){
+    const n = signal.length;
+    const re = Float64Array.from(signal);
+    const im = new Float64Array(n);
+    const { re: outRe, im: outIm } = bluesteinDFT(re, im, false);
+    const half = Math.floor(n/2) + 1;
+    const mag = new Float64Array(half);
+    for (let k = 0; k < half; k++) mag[k] = Math.hypot(outRe[k], outIm[k]);
+    return mag;
+  }
+
+  // scipy.signal.find_peaks(x, height, distance) equivalent: local maxima
+  // (plateaus resolved to their midpoint, matching scipy's convention), then
+  // filtered by minimum height, then thinned so no two survivors are closer
+  // than `distance` samples — processed in descending-height priority order,
+  // exactly matching scipy's `_select_by_peak_distance`.
+  function findPeaksHeightDistance(x, height, distance){
+    const n = x.length;
+    const rawPeaks = [];
+    let i = 1;
+    while (i < n - 1){
+      if (x[i-1] < x[i]){
+        let iAhead = i + 1;
+        while (iAhead < n - 1 && x[iAhead] === x[i]) iAhead++;
+        if (x[iAhead] < x[i]){
+          const leftEdge = i, rightEdge = iAhead - 1;
+          rawPeaks.push(Math.floor((leftEdge + rightEdge) / 2));
+          i = iAhead;
+          continue;
+        }
+      }
+      i++;
+    }
+    let peaks = height == null ? rawPeaks : rawPeaks.filter(p => x[p] >= height);
+    if (distance != null && distance >= 1 && peaks.length > 1){
+      const order = peaks.slice().sort((a,b) => x[b] - x[a]);
+      const keep = new Set(peaks);
+      for (const p of order){
+        if (!keep.has(p)) continue;
+        for (const q of peaks){
+          if (q !== p && keep.has(q) && Math.abs(q - p) < distance) keep.delete(q);
+        }
+      }
+      peaks = peaks.filter(p => keep.has(p));
+    }
+    peaks.sort((a,b) => a - b);
+    return peaks;
+  }
+
+  // Matches Python's int(sr*sec) truncation (not round) exactly.
+  function trimSignalRF(signal, sr, skipStartSec, skipEndSec){
+    const startIdx = Math.floor(sr * skipStartSec);
+    let endIdx = signal.length - Math.floor(sr * skipEndSec);
+    endIdx = Math.max(startIdx, endIdx);
+    return signal.slice(startIdx, endIdx);
+  }
+
+  // moving-average energy envelope (mode="same" convolution of x^2 with a
+  // box filter), then find_peaks(height=rel*max, distance) -> onset sample
+  // indices, optionally thinned to the N loudest if expectedTaps is given.
+  function detectTapsRF(signal, sr, opts){
+    opts = opts || {};
+    const minGapMs = opts.minGapMs != null ? opts.minGapMs : 150;
+    const energyWinMs = opts.energyWinMs != null ? opts.energyWinMs : 10;
+    const relThreshold = opts.relThreshold != null ? opts.relThreshold : 0.15;
+    const expectedTaps = opts.expectedTaps != null ? opts.expectedTaps : null;
+
+    const win = Math.max(1, Math.floor(sr * energyWinMs / 1000));
+    const n = signal.length;
+    const sq = new Float64Array(n);
+    for (let i = 0; i < n; i++) sq[i] = signal[i]*signal[i];
+
+    const energy = new Float64Array(n);
+    // Matches numpy's convolve(..., mode="same") alignment exactly: for a
+    // kernel of length `win`, output[k] sums signal[k+kStart .. k+kEnd] where
+    // s0 = floor((win-1)/2), kStart = s0-win+1, kEnd = s0.
+    const s0 = Math.floor((win-1)/2);
+    const kStart = s0 - win + 1;
+    const kEnd = s0;
+    for (let i = 0; i < n; i++){
+      let sum = 0;
+      const lo = Math.max(0, i + kStart), hi = Math.min(n-1, i + kEnd);
+      for (let j = lo; j <= hi; j++) sum += sq[j];
+      energy[i] = sum / win;
+    }
+
+    const minDistance = Math.floor(sr * minGapMs / 1000);
+    let maxE = -Infinity;
+    for (let i = 0; i < n; i++) if (energy[i] > maxE) maxE = energy[i];
+    const height = relThreshold * maxE;
+
+    let peaks = findPeaksHeightDistance(energy, height, minDistance);
+
+    if (expectedTaps != null && peaks.length > expectedTaps){
+      const withE = peaks.map(p => ({ p, e: energy[p] }));
+      withE.sort((a,b) => b.e - a.e);
+      peaks = withE.slice(0, expectedTaps).map(o => o.p).sort((a,b) => a-b);
+    }
+    return peaks;
+  }
+
+  function extractWindowRF(signal, sr, onsetIdx, windowMs, preMs){
+    windowMs = windowMs != null ? windowMs : 500;
+    preMs = preMs != null ? preMs : 5;
+    const pre = Math.floor(sr * preMs / 1000);
+    const length = Math.floor(sr * windowMs / 1000);
+    const start = Math.max(0, onsetIdx - pre);
+    const segment = new Float64Array(length);
+    const n = signal.length;
+    for (let i = 0; i < length; i++){
+      const si = start + i;
+      segment[i] = si < n ? signal[si] : 0;
+    }
+    return segment;
+  }
+
+  // Average FFT magnitude of quiet gaps between taps (plus the lead-in before
+  // the first tap, if there's room) -> a background-noise profile to subtract
+  // from each tap's own spectrum in fftFeaturesRF.
+  function estimateNoiseSpectrumRF(signal, sr, onsets, windowMs, tailMarginMs){
+    windowMs = windowMs != null ? windowMs : 120;
+    tailMarginMs = tailMarginMs != null ? tailMarginMs : 300;
+    const length = Math.floor(sr * windowMs / 1000);
+    const margin = Math.floor(sr * tailMarginMs / 1000);
+    const segments = [];
+
+    if (onsets.length > 0 && onsets[0] - length > 0){
+      segments.push(signal.slice(0, length));
+    }
+    for (let k = 0; k < onsets.length - 1; k++){
+      const a = onsets[k], b = onsets[k+1];
+      const start = a + margin, end = start + length;
+      if (end < b) segments.push(signal.slice(start, end));
+    }
+    if (!segments.length) return null;
+
+    const hann = new Float64Array(length);
+    for (let i = 0; i < length; i++) hann[i] = 0.5 - 0.5*Math.cos(2*Math.PI*i/(length-1));
+
+    let sumSpec = null;
+    for (const seg of segments){
+      const windowed = new Float64Array(length);
+      for (let i = 0; i < length; i++) windowed[i] = seg[i] * hann[i];
+      const mag = rfftMag(windowed);
+      if (!sumSpec) sumSpec = new Float64Array(mag.length);
+      for (let i = 0; i < mag.length; i++) sumSpec[i] += mag[i];
+    }
+    for (let i = 0; i < sumSpec.length; i++) sumSpec[i] /= segments.length;
+    return sumSpec;
+  }
+
+  function getBinEdgesRF(sr, nBins, fmin, fmax){
+    nBins = nBins != null ? nBins : 64;
+    fmin = fmin != null ? fmin : 20;
+    fmax = fmax != null ? fmax : sr/2;
+    const edges = new Float64Array(nBins + 1);
+    const logMin = Math.log10(fmin), logMax = Math.log10(fmax);
+    for (let i = 0; i <= nBins; i++){
+      edges[i] = Math.pow(10, logMin + (logMax - logMin) * (i / nBins));
+    }
+    return edges;
+  }
+
+  function fftFeaturesRF(segment, sr, opts){
+    opts = opts || {};
+    const nBins = opts.nBins != null ? opts.nBins : 64;
+    const fmin = opts.fmin != null ? opts.fmin : 20;
+    const fmax = opts.fmax != null ? opts.fmax : sr/2;
+    const noiseSpectrum = opts.noiseSpectrum || null;
+
+    const length = segment.length;
+    const hann = new Float64Array(length);
+    for (let i = 0; i < length; i++) hann[i] = 0.5 - 0.5*Math.cos(2*Math.PI*i/(length-1));
+    const windowed = new Float64Array(length);
+    for (let i = 0; i < length; i++) windowed[i] = segment[i] * hann[i];
+
+    let spectrum = rfftMag(windowed);
+    if (noiseSpectrum){
+      spectrum = spectrum.map((v,i) => Math.max(0, v - (noiseSpectrum[i]||0)));
+    }
+
+    const freqs = new Float64Array(spectrum.length);
+    for (let k = 0; k < spectrum.length; k++) freqs[k] = k * sr / length;
+
+    const edges = getBinEdgesRF(sr, nBins, fmin, fmax);
+    const features = new Float64Array(nBins);
+    for (let i = 0; i < nBins; i++){
+      let sum = 0, count = 0;
+      for (let k = 0; k < freqs.length; k++){
+        if (freqs[k] >= edges[i] && freqs[k] < edges[i+1]){ sum += spectrum[k]; count++; }
+      }
+      features[i] = count > 0 ? sum / count : 0;
+    }
+    for (let i = 0; i < nBins; i++) features[i] = Math.log1p(features[i]);
+    return features;
+  }
+
+  // ---- ML utilities shared by KMeans + Random Forest below ----
+
+  // Deterministic, seedable PRNG (mulberry32). Not bit-compatible with numpy's
+  // Mersenne Twister — sklearn's exact random_state sequence can't be
+  // reproduced from JS — but fully reproducible run-to-run, which is what
+  // matters for a stable UI.
+  function makeRng(seed){
+    let a = seed >>> 0;
+    return function(){
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function euclideanSq(a, b){
+    let s = 0;
+    for (let i = 0; i < a.length; i++){ const d = a[i]-b[i]; s += d*d; }
+    return s;
+  }
+
+  // StandardScaler: zero mean, unit variance per column (population std,
+  // ddof=0, matching sklearn.preprocessing.StandardScaler). A zero-variance
+  // column is left unscaled (scale forced to 1), same as sklearn's
+  // _handle_zeros_in_scale.
+  function standardScale(X){
+    const n = X.length, d = X[0].length;
+    const mean = new Float64Array(d), std = new Float64Array(d);
+    for (let j = 0; j < d; j++){
+      let s = 0;
+      for (let i = 0; i < n; i++) s += X[i][j];
+      mean[j] = s / n;
+    }
+    for (let j = 0; j < d; j++){
+      let s = 0;
+      for (let i = 0; i < n; i++){ const dv = X[i][j]-mean[j]; s += dv*dv; }
+      let sd = Math.sqrt(s / n);
+      std[j] = sd === 0 ? 1 : sd;
+    }
+    const Xs = X.map(row => row.map((v,j) => (v - mean[j]) / std[j]));
+    return { Xs, mean, std };
+  }
+
+  // k-means++ seeding (Arthur & Vassilvitskii 2007), the sklearn default init.
+  function kmeansPlusPlusInit(X, k, rng){
+    const n = X.length;
+    const centers = [];
+    const first = Math.floor(rng() * n);
+    centers.push(X[first].slice());
+    const distSq = new Float64Array(n).fill(Infinity);
+    for (let c = 1; c < k; c++){
+      for (let i = 0; i < n; i++){
+        const dc = euclideanSq(X[i], centers[centers.length-1]);
+        if (dc < distSq[i]) distSq[i] = dc;
+      }
+      let total = 0;
+      for (let i = 0; i < n; i++) total += distSq[i];
+      let r = rng() * total, idx = 0;
+      for (let i = 0; i < n; i++){ r -= distSq[i]; if (r <= 0){ idx = i; break; } idx = i; }
+      centers.push(X[idx].slice());
+    }
+    return centers;
+  }
+
+  // One Lloyd's-algorithm run to convergence (or maxIter), matching sklearn's
+  // KMeans (init=k-means++, algorithm="lloyd").
+  function kmeansSingleRun(X, k, rng, maxIter, tol){
+    maxIter = maxIter != null ? maxIter : 300;
+    tol = tol != null ? tol : 1e-4;
+    const n = X.length, d = X[0].length;
+    let centers = kmeansPlusPlusInit(X, k, rng);
+    let labels = new Int32Array(n);
+
+    for (let iter = 0; iter < maxIter; iter++){
+      let changed = false;
+      for (let i = 0; i < n; i++){
+        let best = 0, bestD = Infinity;
+        for (let c = 0; c < k; c++){
+          const dd = euclideanSq(X[i], centers[c]);
+          if (dd < bestD){ bestD = dd; best = c; }
+        }
+        if (labels[i] !== best){ labels[i] = best; changed = true; }
+      }
+
+      const newCenters = Array.from({length:k}, () => new Float64Array(d));
+      const counts = new Int32Array(k);
+      for (let i = 0; i < n; i++){
+        const c = labels[i];
+        counts[c]++;
+        for (let j = 0; j < d; j++) newCenters[c][j] += X[i][j];
+      }
+      let shift = 0;
+      for (let c = 0; c < k; c++){
+        if (counts[c] === 0){ newCenters[c] = centers[c]; continue; }
+        for (let j = 0; j < d; j++) newCenters[c][j] /= counts[c];
+        shift += euclideanSq(newCenters[c], centers[c]);
+      }
+      centers = newCenters.map(a => Array.from(a));
+      if (!changed || shift < tol) break;
+    }
+
+    let inertia = 0;
+    for (let i = 0; i < n; i++) inertia += euclideanSq(X[i], centers[labels[i]]);
+    return { labels: Array.from(labels), centers, inertia };
+  }
+
+  // KMeans with n_init restarts, keeping the lowest-inertia run.
+  function kmeansFit(X, k, opts){
+    opts = opts || {};
+    const nInit = opts.nInit != null ? opts.nInit : 10;
+    const rng = opts.rng || makeRng(42);
+    let best = null;
+    for (let r = 0; r < nInit; r++){
+      const run = kmeansSingleRun(X, k, rng, opts.maxIter, opts.tol);
+      if (!best || run.inertia < best.inertia) best = run;
+    }
+    return best;
+  }
+
+  // Exact silhouette score (mean silhouette coefficient), matching
+  // sklearn.metrics.silhouette_score with metric="euclidean".
+  function silhouetteScore(X, labels){
+    const n = X.length;
+    const clusters = {};
+    for (let i = 0; i < n; i++){
+      (clusters[labels[i]] = clusters[labels[i]] || []).push(i);
+    }
+    const clusterIds = Object.keys(clusters);
+    if (clusterIds.length < 2) return NaN;
+
+    const dist = Array.from({length:n}, () => new Float64Array(n));
+    for (let i = 0; i < n; i++){
+      for (let j = i+1; j < n; j++){
+        const dd = Math.sqrt(euclideanSq(X[i], X[j]));
+        dist[i][j] = dd; dist[j][i] = dd;
+      }
+    }
+
+    let total = 0;
+    for (let i = 0; i < n; i++){
+      const own = clusters[labels[i]];
+      let a = 0;
+      if (own.length > 1){
+        let s = 0;
+        for (const j of own) if (j !== i) s += dist[i][j];
+        a = s / (own.length - 1);
+      } else {
+        continue; // singleton cluster -> silhouette 0 for this point (sklearn convention)
+      }
+      let b = Infinity;
+      for (const cid of clusterIds){
+        if (Number(cid) === labels[i]) continue;
+        const members = clusters[cid];
+        let s = 0;
+        for (const j of members) s += dist[i][j];
+        const meanD = s / members.length;
+        if (meanD < b) b = meanD;
+      }
+      const s = (b - a) / Math.max(a, b);
+      total += s;
+    }
+    return total / n;
+  }
+
+  // KMeans clustering used both to select k (via silhouette) and as the
+  // cross-check clustering against the RF-proximity labels. Mirrors
+  // kmeans_cluster() in the Python script.
+  function kmeansClusterAutoK(X, opts){
+    opts = opts || {};
+    const { Xs } = standardScale(X);
+    const n = X.length;
+    const rng = makeRng(opts.randomState != null ? opts.randomState : 42);
+
+    if (opts.k != null){
+      const run = kmeansFit(Xs, opts.k, { nInit: 10, rng });
+      return { labels: run.labels, k: opts.k, Xs, scores: null };
+    }
+
+    const kRange = opts.kRange || [2,3,4,5,6,7,8];
+    let bestK = null, bestScore = -Infinity, bestLabels = null;
+    const scores = [];
+    for (const k of kRange){
+      if (k >= n) break;
+      const run = kmeansFit(Xs, k, { nInit: 10, rng });
+      const score = silhouetteScore(Xs, run.labels);
+      scores.push({ k, score });
+      if (score > bestScore){ bestScore = score; bestK = k; bestLabels = run.labels; }
+    }
+    return { labels: bestLabels, k: bestK, Xs, scores };
+  }
+
+  // ---- PRIMARY: Random Forest real-vs-synthetic proximity clustering ----
+  // (Shi & Horvath 2006 unsupervised-RF trick), mirroring
+  // rf_proximity_clustering() in the Python script.
+
+  // Independent per-column shuffle: X_synth[i][j] = X[perm_j[i]][j], with a
+  // fresh random permutation perm_j for every column j.
+  function columnShuffle(X, rng){
+    const n = X.length, d = X[0].length;
+    const synth = Array.from({length:n}, () => new Array(d));
+    for (let j = 0; j < d; j++){
+      const order = Array.from({length:n}, (_,i) => i);
+      for (let i = n-1; i > 0; i--){
+        const r = Math.floor(rng() * (i+1));
+        const tmp = order[i]; order[i] = order[r]; order[r] = tmp;
+      }
+      for (let i = 0; i < n; i++) synth[i][j] = X[order[i]][j];
+    }
+    return synth;
+  }
+
+  function giniImpurity(counts, total){
+    if (total === 0) return 0;
+    let sumSq = 0;
+    for (const c of counts) sumSq += (c/total)*(c/total);
+    return 1 - sumSq;
+  }
+
+  // Find the best (feature, threshold) split among a random feature subset,
+  // scanning midpoint thresholds between consecutive distinct sorted values,
+  // subject to min_samples_leaf on both children.
+  function bestSplitCART(X, y, idx, nClasses, featureSubset, minSamplesLeaf){
+    const n = idx.length;
+    const totalCounts = new Array(nClasses).fill(0);
+    for (const i of idx) totalCounts[y[i]]++;
+    const parentGini = giniImpurity(totalCounts, n);
+    if (parentGini === 0) return null;
+
+    let best = null;
+    for (const f of featureSubset){
+      const sorted = idx.slice().sort((a,b) => X[a][f] - X[b][f]);
+      const leftCounts = new Array(nClasses).fill(0);
+      const rightCounts = totalCounts.slice();
+      for (let pos = 0; pos < n - 1; pos++){
+        const i = sorted[pos];
+        leftCounts[y[i]]++; rightCounts[y[i]]--;
+        const nLeft = pos + 1, nRight = n - nLeft;
+        const vHere = X[sorted[pos]][f], vNext = X[sorted[pos+1]][f];
+        if (vHere === vNext) continue;
+        if (nLeft < minSamplesLeaf || nRight < minSamplesLeaf) continue;
+
+        const gLeft = giniImpurity(leftCounts, nLeft);
+        const gRight = giniImpurity(rightCounts, nRight);
+        const weighted = (nLeft/n)*gLeft + (nRight/n)*gRight;
+        const decrease = parentGini - weighted;
+        if (!best || decrease > best.impurityDecrease + 1e-15){
+          best = {
+            feature: f, threshold: (vHere + vNext) / 2,
+            impurityDecrease: decrease,
+            leftIdx: sorted.slice(0, nLeft), rightIdx: sorted.slice(nLeft),
+            leftGini: gLeft, rightGini: gRight, nLeft, nRight,
+          };
+        }
+      }
+    }
+    return best;
+  }
+
+  function sampleFeatureSubset(nFeatures, maxFeatures, rng){
+    const all = Array.from({length:nFeatures}, (_,i) => i);
+    for (let i = all.length-1; i > 0; i--){
+      const r = Math.floor(rng()*(i+1));
+      const t = all[i]; all[i] = all[r]; all[r] = t;
+    }
+    return all.slice(0, maxFeatures);
+  }
+
+  // Recursively grow one CART tree (Gini impurity, min_samples_leaf, random
+  // per-split feature subsampling of size max_features). Leaf nodes carry a
+  // unique numeric id (for proximity co-occurrence). Also accumulates
+  // per-feature impurity-decrease importances into `importanceAccum`.
+  function buildCARTTree(X, y, idx, nClasses, maxFeatures, minSamplesLeaf, rng, importanceAccum, leafIdCounter){
+    const counts = new Array(nClasses).fill(0);
+    for (const i of idx) counts[y[i]]++;
+    let majority = 0;
+    for (let c = 1; c < nClasses; c++) if (counts[c] > counts[majority]) majority = c;
+
+    if (idx.length < 2*minSamplesLeaf){
+      return { leaf: true, id: leafIdCounter.next++, majority, nSamples: idx.length };
+    }
+
+    const featureSubset = sampleFeatureSubset(X[0].length, maxFeatures, rng);
+    const split = bestSplitCART(X, y, idx, nClasses, featureSubset, minSamplesLeaf);
+    if (!split){
+      return { leaf: true, id: leafIdCounter.next++, majority, nSamples: idx.length };
+    }
+
+    importanceAccum[split.feature] += idx.length * giniImpurity(counts, idx.length)
+      - split.nLeft * split.leftGini - split.nRight * split.rightGini;
+
+    const left = buildCARTTree(X, y, split.leftIdx, nClasses, maxFeatures, minSamplesLeaf, rng, importanceAccum, leafIdCounter);
+    const right = buildCARTTree(X, y, split.rightIdx, nClasses, maxFeatures, minSamplesLeaf, rng, importanceAccum, leafIdCounter);
+    return { leaf: false, feature: split.feature, threshold: split.threshold, left, right };
+  }
+
+  function applyTree(tree, x){
+    let node = tree;
+    while (!node.leaf){
+      node = x[node.feature] <= node.threshold ? node.left : node.right;
+    }
+    return node;
+  }
+
+  // Train n_estimators bootstrap-sampled CART trees to separate real rows
+  // (y=1) from column-shuffled synthetic rows (y=0), matching
+  // RandomForestClassifier(min_samples_leaf=3, max_features="sqrt",
+  // bootstrap=True). Returns cluster labels (via average-linkage hierarchical
+  // clustering on leaf-co-occurrence proximity) and forest-averaged,
+  // normalized Gini feature importances (matching clf.feature_importances_).
+  function rfProximityClustering(X, k, opts){
+    opts = opts || {};
+    const nEstimators = opts.nEstimators != null ? opts.nEstimators : 500;
+    const randomState = opts.randomState != null ? opts.randomState : 42;
+    const minSamplesLeaf = opts.minSamplesLeaf != null ? opts.minSamplesLeaf : 3;
+    const rng = makeRng(randomState);
+
+    const n = X.length, d = X[0].length;
+    const maxFeatures = Math.max(1, Math.round(Math.sqrt(d)));
+    const synth = columnShuffle(X, rng);
+    const Xc = X.concat(synth);
+    const y = new Array(2*n);
+    for (let i = 0; i < n; i++){ y[i] = 1; y[n+i] = 0; }
+    const total = 2*n;
+
+    const leafPerTree = [];
+    const importanceSum = new Float64Array(d);
+
+    for (let t = 0; t < nEstimators; t++){
+      const bootIdx = new Array(total);
+      for (let i = 0; i < total; i++) bootIdx[i] = Math.floor(rng() * total);
+
+      const importanceAccum = new Float64Array(d);
+      const leafIdCounter = { next: 0 };
+      const tree = buildCARTTree(Xc, y, bootIdx, 2, maxFeatures, minSamplesLeaf, rng, importanceAccum, leafIdCounter);
+
+      let treeSum = 0;
+      for (let f = 0; f < d; f++) treeSum += importanceAccum[f];
+      if (treeSum > 0){
+        for (let f = 0; f < d; f++) importanceSum[f] += (importanceAccum[f] / treeSum);
+      }
+
+      const leaves = new Array(n);
+      for (let i = 0; i < n; i++) leaves[i] = applyTree(tree, X[i]).id;
+      leafPerTree.push(leaves);
+    }
+
+    const importances = new Float64Array(d);
+    for (let f = 0; f < d; f++) importances[f] = importanceSum[f] / nEstimators;
+
+    const prox = Array.from({length:n}, () => new Float64Array(n));
+    for (const leaves of leafPerTree){
+      for (let i = 0; i < n; i++){
+        for (let j = 0; j < n; j++){
+          if (leaves[i] === leaves[j]) prox[i][j] += 1;
+        }
+      }
+    }
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) prox[i][j] /= nEstimators;
+
+    const distance = Array.from({length:n}, () => new Float64Array(n));
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) distance[i][j] = i===j ? 0 : 1 - prox[i][j];
+
+    const labels = hierarchicalClusterAverageLinkage(distance, k);
+    return { labels, importances: Array.from(importances), proximity: prox };
+  }
+
+  // Average-linkage (UPGMA) agglomerative clustering cut at k clusters,
+  // matching scipy.cluster.hierarchy.linkage(..., method="average") +
+  // fcluster(Z, t=k, criterion="maxclust"), via the Lance-Williams update.
+  function hierarchicalClusterAverageLinkage(distance, k){
+    const n = distance.length;
+    let clusters = Array.from({length:n}, (_,i) => ({ members: [i], id: i }));
+    let D = distance.map(row => Float64Array.from(row));
+
+    while (clusters.length > k){
+      let bi = 0, bj = 1, bd = Infinity;
+      for (let i = 0; i < clusters.length; i++){
+        for (let j = i+1; j < clusters.length; j++){
+          if (D[i][j] < bd){ bd = D[i][j]; bi = i; bj = j; }
+        }
+      }
+      const ni = clusters[bi].members.length, nj = clusters[bj].members.length;
+      const newRow = new Float64Array(clusters.length);
+      for (let m = 0; m < clusters.length; m++){
+        if (m === bi || m === bj) continue;
+        newRow[m] = (ni*D[bi][m] + nj*D[bj][m]) / (ni+nj);
+      }
+
+      const merged = { members: clusters[bi].members.concat(clusters[bj].members), id: clusters[bi].id };
+      const keep = [];
+      for (let m = 0; m < clusters.length; m++) if (m !== bi && m !== bj) keep.push(m);
+
+      const newClusters = keep.map(m => clusters[m]);
+      newClusters.push(merged);
+      const newD = Array.from({length:newClusters.length}, () => new Float64Array(newClusters.length));
+      for (let a = 0; a < keep.length; a++){
+        for (let b = a+1; b < keep.length; b++){
+          newD[a][b] = newD[b][a] = D[keep[a]][keep[b]];
+        }
+      }
+      const lastIdx = newClusters.length - 1;
+      for (let a = 0; a < keep.length; a++){
+        newD[a][lastIdx] = newD[lastIdx][a] = newRow[keep[a]];
+      }
+
+      clusters = newClusters;
+      D = newD;
+    }
+
+    const labels = new Array(n);
+    clusters.forEach((c, ci) => { for (const m of c.members) labels[m] = ci + 1; });
+    return labels;
+  }
+
+  // Adjusted Rand index between two label assignments, matching
+  // sklearn.metrics.adjusted_rand_score exactly.
+  function adjustedRandScore(labelsA, labelsB){
+    const n = labelsA.length;
+    const mapA = {}, mapB = {};
+    let ai = 0, bi = 0;
+    const a2 = new Array(n), b2 = new Array(n);
+    for (let i = 0; i < n; i++){
+      if (!(labelsA[i] in mapA)) mapA[labelsA[i]] = ai++;
+      if (!(labelsB[i] in mapB)) mapB[labelsB[i]] = bi++;
+      a2[i] = mapA[labelsA[i]]; b2[i] = mapB[labelsB[i]];
+    }
+    const nA = ai, nB = bi;
+    const contingency = Array.from({length:nA}, () => new Float64Array(nB));
+    for (let i = 0; i < n; i++) contingency[a2[i]][b2[i]]++;
+
+    const comb2 = x => x*(x-1)/2;
+    let sumComb = 0;
+    const rowSum = new Float64Array(nA), colSum = new Float64Array(nB);
+    for (let i = 0; i < nA; i++){
+      for (let j = 0; j < nB; j++){
+        sumComb += comb2(contingency[i][j]);
+        rowSum[i] += contingency[i][j];
+        colSum[j] += contingency[i][j];
+      }
+    }
+    let sumRow = 0; for (let i = 0; i < nA; i++) sumRow += comb2(rowSum[i]);
+    let sumCol = 0; for (let j = 0; j < nB; j++) sumCol += comb2(colSum[j]);
+    const totalComb = comb2(n);
+    const expected = (sumRow*sumCol) / totalComb;
+    const maxIndex = (sumRow + sumCol) / 2;
+    if (maxIndex === expected) return 0;
+    return (sumComb - expected) / (maxIndex - expected);
+  }
+
+  function smoothMovingAvg(arr, winSamples){
+    winSamples = Math.max(1, winSamples|0);
+    const n = arr.length;
+    const out = new Float64Array(n);
+    const prefix = new Float64Array(n+1);
+    for (let i = 0; i < n; i++) prefix[i+1] = prefix[i] + arr[i];
+    const half = Math.floor(winSamples/2);
+    for (let i = 0; i < n; i++){
+      let lo = i - half, hi = lo + winSamples;
+      if (lo < 0) lo = 0;
+      if (hi > n) hi = n;
+      out[i] = (prefix[hi] - prefix[lo]) / Math.max(1, (hi - lo));
+    }
+    return out;
+  }
+
+  // Amplitude envelope via FFT-based Hilbert transform (analytic signal),
+  // computed at the exact sample count (see bluesteinDFT above) to match
+  // scipy.signal.hilbert(data).
+  function computeEnvelopeHilbert(samples, smoothSamples){
+    const n = samples.length;
+    const zeros = new Float64Array(n);
+    const { re, im } = bluesteinDFT(samples, zeros, false);
+    const half = Math.floor(n/2);
+    // Analytic-signal mask: double the positive frequencies, zero the negative
+    // ones, leave DC (and the Nyquist bin, if n is even) untouched — same
+    // recipe as scipy.signal.hilbert. For even n the Nyquist bin is index
+    // `half` (left at ×1); for odd n there is no separate Nyquist bin, so the
+    // doubled range extends one bin further, through index `half`.
+    const doubleUpTo = (n % 2 === 0) ? half - 1 : half; // inclusive
+    for (let k = 1; k <= doubleUpTo; k++){ re[k] *= 2; im[k] *= 2; }
+    for (let k = half+1; k < n; k++){ re[k] = 0; im[k] = 0; }
+    const { re: outRe, im: outIm } = bluesteinDFT(re, im, true);
+    const env = new Float64Array(n);
+    for (let i = 0; i < n; i++) env[i] = Math.hypot(outRe[i], outIm[i]);
+    return smoothMovingAvg(env, smoothSamples);
+  }
+
+  // Estimate where leading speech/noise ends: longest "quiet" run in the first
+  // half of the recording, cutting at its midpoint. Mirrors auto_detect_speech_end.
+  function autoDetectSkipStart(samples, sr){
+    const smoothSamples = Math.max(1, Math.round(sr*50/1000));
+    const env = computeEnvelopeHilbert(samples, smoothSamples);
+    const half = Math.floor(env.length/2);
+    const firstHalf = env.subarray(0, half);
+    const sorted = Float64Array.from(firstHalf).sort();
+    const threshold = sorted.length ? sorted[Math.floor(0.25*(sorted.length-1))] : 0;
+    let bestStart = 0, bestLen = 0, curStart = 0, curLen = 0;
+    for (let i = 0; i < half; i++){
+      if (firstHalf[i] < threshold){
+        if (curLen === 0) curStart = i;
+        curLen++;
+        if (curLen > bestLen){ bestLen = curLen; bestStart = curStart; }
+      } else curLen = 0;
+    }
+    const cutoffSample = bestStart + Math.floor(bestLen/2);
+    return cutoffSample / sr;
+  }
+
+  // Topographic prominence of a local maximum at `idx`: scan outward until a
+  // taller point or the array edge, tracking the lowest value seen on each
+  // side; prominence = height - the higher (shallower) of the two floors.
+  // Mirrors scipy.signal.peak_prominences with no wlen limit.
+  function peakProminence(arr, idx){
+    const height = arr[idx];
+    let leftMin = height;
+    for (let i = idx-1; i >= 0; i--){
+      if (arr[i] > height) break;
+      if (arr[i] < leftMin) leftMin = arr[i];
+    }
+    let rightMin = height;
+    for (let i = idx+1; i < arr.length; i++){
+      if (arr[i] > height) break;
+      if (arr[i] < rightMin) rightMin = arr[i];
+    }
+    return height - Math.max(leftMin, rightMin);
+  }
+
+  // Detect tap/pluck onsets: envelope onset-strength peaks, keep the strongest
+  // `numEvents` by envelope value shortly after onset, then return in time order.
+  function detectTapEvents(samples, sr, numEvents, minGapSec, skipStartSec){
+    const skipSamples = Math.max(0, Math.round(skipStartSec*sr));
+    const region = samples.subarray(Math.min(skipSamples, samples.length));
+    if (region.length < 32) throw new Error('not enough audio after Crop Start');
+
+    const smoothSamples = Math.max(1, Math.round(sr*5/1000));
+    const env = computeEnvelopeHilbert(region, smoothSamples);
+    const onset = new Float64Array(env.length);
+    for (let i = 1; i < env.length; i++) onset[i] = Math.max(0, env[i] - env[i-1]);
+
+    const minDistance = Math.max(1, Math.round(minGapSec*sr));
+    let maxOnset = 0;
+    for (let i = 0; i < onset.length; i++) if (onset[i] > maxOnset) maxOnset = onset[i];
+    const prominenceThresh = maxOnset > 0 ? maxOnset*0.05 : 0;
+
+    const rawCandidates = [];
+    for (let i = 1; i < onset.length-1; i++){
+      if (onset[i] > prominenceThresh && onset[i] >= onset[i-1] && onset[i] > onset[i+1]) rawCandidates.push(i);
+    }
+
+    // Filter by true topographic prominence, matching scipy's find_peaks(...,
+    // prominence=...) rather than approximating it with a bare height check.
+    // Safe to prefilter by height first: prominence <= height always, so this
+    // never discards a candidate that would have passed the prominence test.
+    const candidates = rawCandidates.filter(idx => peakProminence(onset, idx) >= prominenceThresh);
+    if (!candidates.length) throw new Error('no tap/pluck transients detected — try adjusting Crop Start or Min Gap');
+
+    const order = candidates.slice().sort((a,b) => onset[b]-onset[a]);
+    const kept = [];
+    for (const idx of order){
+      if (kept.every(k => Math.abs(k-idx) >= minDistance)) kept.push(idx);
+    }
+
+    const lookAhead = Math.round(0.02*sr);
+    const scored = kept.map(idx => ({ idx, score: env[Math.min(idx+lookAhead, env.length-1)] }));
+    scored.sort((a,b) => b.score-a.score);
+    const nTake = Math.min(numEvents, scored.length);
+    const chosen = scored.slice(0, nTake).map(s => s.idx).sort((a,b) => a-b);
+
+    const peakIndices = chosen.map(c => c + skipSamples);
+
+    return peakIndices.map(p => {
+      const lo = Math.max(0, p - Math.round(0.01*sr));
+      const hi = Math.min(samples.length, p + Math.round(0.03*sr));
+      let bestI = lo, bestV = -Infinity;
+      for (let i = lo; i < hi; i++){
+        const v = Math.abs(samples[i]);
+        if (v > bestV){ bestV = v; bestI = i; }
+      }
+      return bestI;
+    }).sort((a,b) => a-b);
+  }
+
+  function extractEventWindow(samples, sr, peakIdx, offsetSec, durationSec){
+    const startIdx = peakIdx + Math.round(offsetSec*sr);
+    if (startIdx >= samples.length) throw new Error('offset window exceeds file length for this event');
+    const endIdx = Math.min(startIdx + Math.round(durationSec*sr), samples.length);
+    return samples.slice(startIdx, endIdx);
+  }
+
+  function applyHann(arr){
+    const n = arr.length;
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++){
+      const w = n > 1 ? 0.5 - 0.5*Math.cos(2*Math.PI*i/(n-1)) : 1;
+      out[i] = arr[i]*w;
+    }
+    return out;
+  }
+
+  // Zero-padded FFT magnitude spectrum (same M-real/N-padded convention as
+  // computeSpectrumAt above: padding only interpolates, it doesn't add resolution).
+  // Exact (unpadded) FFT magnitude spectrum, matching np.fft.rfft(data) bin-
+  // for-bin. We used to zero-pad this to interpolate a smoother curve, but
+  // that was wrong here: padding reveals extra fine-grained window-sidelobe
+  // ripple between the coarser raw bins, which can register as *extra* local
+  // maxima that don't exist as distinct samples in Python's coarser grid —
+  // changing which peaks win the top-N-basis / top-5-common comparison.
+  // Built on bluesteinDFT so M doesn't need to be a power of 2.
+  function computeFftMagExact(windowed, sr){
+    const M = windowed.length;
+    const zeros = new Float64Array(M);
+    const { re, im } = bluesteinDFT(windowed, zeros, false);
+    const half = Math.floor(M/2) + 1; // rfft length, same convention as np.fft.rfft
+    const freqs = new Float64Array(half);
+    const mags = new Float64Array(half);
+    for (let k = 0; k < half; k++){
+      freqs[k] = k*sr/M;
+      let mag = Math.hypot(re[k], im[k]) / M;
+      if (k > 0 && k < half-1) mag *= 2; // matches magnitude[1:-1] *= 2 in compute_fft_raw
+      mags[k] = mag;
+    }
+    return { freqs, mags, M };
+  }
+
+  function interpolatePeakFreq(freqs, mags, binIdx){
+    const n = mags.length;
+    if (binIdx <= 0 || binIdx >= n-1) return freqs[binIdx];
+    const toDb = v => 20*Math.log10(Math.max(v, 1e-12));
+    const alpha = toDb(mags[binIdx-1]), beta = toDb(mags[binIdx]), gamma = toDb(mags[binIdx+1]);
+    const denom = alpha - 2*beta + gamma;
+    if (Math.abs(denom) < 1e-9) return freqs[binIdx];
+    let p = 0.5*(alpha-gamma)/denom;
+    p = Math.max(-1, Math.min(1, p));
+    const binSpacing = freqs[1]-freqs[0];
+    return freqs[binIdx] + p*binSpacing;
+  }
+
+  // −3dB (half-power) bandwidth of a peak in Hz: walks outward from `peakIdx`
+  // on the full (unmasked) energy spectrum in both directions until energy
+  // drops below 50% of the peak's energy, interpolating each crossing for
+  // sub-bin accuracy. Ports measure_peak_bandwidth from multi_energy.py
+  // exactly (same walk direction, same interpolation, same 0.5Hz floor).
+  function measurePeakBandwidthHz(energy, freqs, peakIdx, minBwHz){
+    minBwHz = minBwHz == null ? 0.5 : minBwHz;
+    const peakEnergy = energy[peakIdx];
+    const halfPower = peakEnergy * 0.5;
+    const n = energy.length;
+    const binSpacing = freqs[1]-freqs[0];
+
+    let left = peakIdx;
+    while (left > 0 && energy[left] >= halfPower) left--;
+    let fLeft;
+    if (left > 0 && energy[left+1] > energy[left]){
+      const fracL = (halfPower - energy[left]) / (energy[left+1] - energy[left]);
+      fLeft = freqs[left] + fracL*binSpacing;
+    } else {
+      fLeft = freqs[left];
+    }
+
+    let right = peakIdx;
+    while (right < n-1 && energy[right] >= halfPower) right++;
+    let fRight;
+    if (right < n-1 && energy[right-1] > energy[right]){
+      const fracR = (halfPower - energy[right]) / (energy[right-1] - energy[right]);
+      fRight = freqs[right] - fracR*binSpacing;
+    } else {
+      fRight = freqs[right];
+    }
+
+    return Math.max(fRight - fLeft, minBwHz);
+  }
+
+  // Top-N local-maxima peaks within [minFreq,maxFreq]. Local maxima are found
+  // and de-duplicated (min separation `minSepBins`) using `rankBy` (defaults
+  // to `mags` — plain magnitude), matching scipy's find_peaks(..., distance=3)
+  // on that same curve. Which of the surviving candidates are finally kept
+  // (top `nPeaks`) and in what order is decided by `selectByFn(idx)` (defaults
+  // to `rankBy[idx]`) — this split matters for multi_energy.py's current
+  // algorithm, where peaks are FOUND on the energy curve but SELECTED/ranked
+  // by normalised energy (energy / −3dB bandwidth), so the two curves differ.
+  // Frequency is always refined from `mags` in dB, matching
+  // interpolate_peak_frequency(freqs, magnitude, ...) being called with
+  // `magnitude` regardless of mode.
+  function findTopNPeaksLinear(freqs, mags, nPeaks, minFreq, maxFreq, minSepBins, rankBy, selectByFn){
+    rankBy = rankBy || mags;
+    const selectVal = selectByFn || (idx => rankBy[idx]);
+    let loIdx = -1, hiIdx = -1;
+    for (let k = 0; k < freqs.length; k++){
+      if (loIdx < 0 && freqs[k] >= minFreq) loIdx = k;
+      if (freqs[k] <= maxFreq) hiIdx = k;
+    }
+    if (loIdx < 0 || hiIdx < loIdx) return [];
+
+    const localMaxima = [];
+    for (let k = loIdx+1; k < hiIdx; k++){
+      if (rankBy[k] > rankBy[k-1] && rankBy[k] >= rankBy[k+1]) localMaxima.push(k);
+    }
+
+    let candidates;
+    if (!localMaxima.length){
+      const idxs = [];
+      for (let k = loIdx; k <= hiIdx; k++) idxs.push(k);
+      idxs.sort((a,b) => rankBy[b]-rankBy[a]);
+      candidates = idxs.slice(0, nPeaks);
+    } else {
+      const sorted = localMaxima.slice().sort((a,b) => rankBy[b]-rankBy[a]);
+      const kept = [];
+      for (const idx of sorted){
+        if (kept.every(k => Math.abs(k-idx) >= minSepBins)) kept.push(idx);
+      }
+      candidates = kept;
+    }
+
+    // Truncate to the final top-N (and decide their order) by `selectVal`,
+    // not `rankBy` — for the energy-mode case this is where a peak found on
+    // the raw energy curve can lose out to a sharper/narrower one once
+    // bandwidth-normalised, exactly as in find_top_n_peaks_linear.
+    const scoreMap = new Map(candidates.map(idx => [idx, selectVal(idx)]));
+    candidates = candidates.slice().sort((a,b) => scoreMap.get(b)-scoreMap.get(a)).slice(0, nPeaks);
+    const results = candidates.map(idx => ({ freq: interpolatePeakFreq(freqs, mags, idx), mag: mags[idx], score: scoreMap.get(idx) }));
+    results.sort((a,b) => b.score-a.score);
+    return results;
+  }
+
+  // Normalise: top `topNBasis` peaks sum to 100%, every reported peak
+  // expressed as % of that sum. useEnergy=true mirrors multi_energy.py's
+  // current algorithm: peaks are found on the energy curve but selected and
+  // ranked by NORMALISED ENERGY = energy / −3dB bandwidth_Hz (rewards sharp,
+  // well-defined resonances over broad/diffuse ones of equal total energy),
+  // and the 100% basis is the sum of those peaks' normalised energies.
+  function computeTopPeaksPct(freqs, mags, topNBasis, minFreq, maxFreq, minSepBins, useEnergy){
+    let rankBy = null, selectByFn = null;
+    if (useEnergy){
+      const energy = mags.map(m => m*m);
+      rankBy = energy;
+      selectByFn = idx => energy[idx] / measurePeakBandwidthHz(energy, freqs, idx);
+    }
+    const topLinear = findTopNPeaksLinear(freqs, mags, topNBasis, minFreq, maxFreq, minSepBins, rankBy, selectByFn);
+    if (!topLinear.length) throw new Error('no spectral peaks found to normalise against');
+    const basisSum = topLinear.reduce((s,p) => s+p.score, 0);
+    if (basisSum <= 0) throw new Error(useEnergy ? 'top peak normalised energies summed to zero' : 'top peak magnitudes summed to zero');
+    const pct = topLinear.map(p => ({ freq: p.freq, pct: (p.score/basisSum)*100 }));
+    pct.sort((a,b) => b.pct-a.pct);
+    return pct;
+  }
+
+  // Cluster peaks across events (within ±toleranceHz) and rank by appearances then avg %.
+  // Mirrors compute_common_frequencies in multi_variance.py.
+  function computeCommonFrequencies(eventResults, toleranceHz, topN){
+    const allPeaks = [];
+    eventResults.forEach(r => r.peaks.forEach(p => allPeaks.push({freq:p.freq, pct:p.pct, ev:r.eventNum})));
+    if (!allPeaks.length) return [];
+    allPeaks.sort((a,b) => a.freq-b.freq);
+
+    const clusters = [];
+    for (const pk of allPeaks){
+      let merged = false;
+      for (const c of clusters){
+        const mean = c.reduce((s,x) => s+x.freq, 0)/c.length;
+        if (Math.abs(pk.freq-mean) <= toleranceHz){ c.push(pk); merged = true; break; }
+      }
+      if (!merged) clusters.push([pk]);
+    }
+
+    const mean = arr => arr.reduce((s,x) => s+x, 0)/arr.length;
+    const std = arr => { const m = mean(arr); return Math.sqrt(mean(arr.map(x => (x-m)*(x-m)))); };
+
+    const summaries = clusters.map(cluster => {
+      const byEvent = new Map();
+      cluster.forEach(({freq,pct,ev}) => {
+        const cur = byEvent.get(ev);
+        if (!cur || pct > cur.pct) byEvent.set(ev, {freq,pct});
+      });
+      const vals = [...byEvent.values()];
+      const hz = vals.map(v => v.freq), pcts = vals.map(v => v.pct);
+      return {
+        freq: mean(hz), appearances: vals.length, avgPct: mean(pcts),
+        stdHz: std(hz), stdPct: std(pcts),
+        minPct: Math.min(...pcts), maxPct: Math.max(...pcts),
+        minHz: Math.min(...hz), maxHz: Math.max(...hz),
+      };
+    });
+
+    summaries.sort((a,b) => (b.appearances-a.appearances) || (b.avgPct-a.avgPct));
+    return summaries.slice(0, topN);
+  }
+
+  // Full per-file pipeline: crop-end trim, crop-start (auto or manual), detect
+  // events, FFT + normalise each, cluster into top-5 common frequencies.
+  async function analyseTapFile(entry, opts){
+    const audioBuffer = entry.audioBuffer;
+    const sr = audioBuffer.sampleRate;
+    const nCh = audioBuffer.numberOfChannels;
+    let samples;
+    if (nCh === 1){
+      samples = audioBuffer.getChannelData(0).slice();
+    } else {
+      const n = audioBuffer.length;
+      samples = new Float32Array(n);
+      for (let c = 0; c < nCh; c++){
+        const ch = audioBuffer.getChannelData(c);
+        for (let i = 0; i < n; i++) samples[i] += ch[i]/nCh;
+      }
+    }
+    let durationTotal = samples.length/sr;
+
+    // Crop End is seconds trimmed off the END of the file (same convention
+    // as Clustering's trim_signal), not an absolute timestamp.
+    const skipEndVal = (entry.skipEnd||'').trim();
+    if (skipEndVal !== ''){
+      const skipEndSec = parseFloat(skipEndVal);
+      if (isFinite(skipEndSec) && skipEndSec > 0){
+        const keepLen = Math.max(1, samples.length - Math.round(skipEndSec*sr));
+        samples = samples.subarray(0, keepLen);
+        durationTotal = samples.length/sr;
+      }
+    }
+    await sleep0();
+
+    const skipStartVal = (entry.skipStart||'').trim();
+    const skipStartSec = skipStartVal !== '' ? parseFloat(skipStartVal) : autoDetectSkipStart(samples, sr);
+    await sleep0();
+
+    const peakIndices = detectTapEvents(samples, sr, opts.numEvents, opts.minGap, skipStartSec);
+    await sleep0();
+
+    const eventResults = [];
+    for (let i = 0; i < peakIndices.length; i++){
+      let windowData;
+      try { windowData = extractEventWindow(samples, sr, peakIndices[i], 0.1, 1.0); }
+      catch(e){ continue; }
+      if (windowData.length < 16) continue;
+
+      const windowed = applyHann(windowData);
+      const { freqs, mags } = computeFftMagExact(windowed, sr);
+      const minSepBins = 3; // matches scipy's find_peaks(mm, distance=3) directly, same bin grid as Python now
+
+      let topPeaksPct;
+      try { topPeaksPct = computeTopPeaksPct(freqs, mags, opts.topNBasis, opts.minFreq, opts.maxFreq, minSepBins, opts.useEnergy); }
+      catch(e){ continue; }
+
+      eventResults.push({ eventNum: i+1, peaks: topPeaksPct.slice(0, 10) });
+      if (i % 3 === 2) await sleep0();
+    }
+
+    if (!eventResults.length) throw new Error('no events successfully processed');
+
+    // Compute the max we'd ever display (10) regardless of the user's current
+    // "Show top" selection, so changing that selector can just re-slice and
+    // redraw instantly without re-running the whole analysis.
+    const freqSummary = computeCommonFrequencies(eventResults, opts.tolerance, 10);
+    return { label: entry.name, freqSummary, eventCount: eventResults.length, detectedEvents: peakIndices.length };
+  }
+
+  // Compute windowed FFT centred at `time` (seconds) on an AudioBuffer.
+  // `M` is the real analysis window (determines true frequency resolution).
+  // `N` is the zero-padded FFT size (denser frequency grid, for a smooth curve
+  // — this does not add real resolution, it just interpolates between the
+  // M-sample window's true frequency response so smoothing has enough points
+  // to average over, even down at 50 Hz).
+  function computeSpectrumAt(audioBuffer, time, M, N){
+    M = M || 4096;
+    N = N || 65536;
+    const sr = audioBuffer.sampleRate;
+    const ch0 = audioBuffer.getChannelData(0);
+    const nCh = audioBuffer.numberOfChannels;
+    const centre = Math.round(time * sr);
+    let start = centre - Math.floor(M/2);
+    const re = new Float64Array(N);
+    const im = new Float64Array(N);
+
+    // mono downmix window extraction with zero padding at boundaries
+    let sumSq = 0, count = 0;
+    for (let i = 0; i < M; i++){
+      const idx = start + i;
+      let sample = 0;
+      if (idx >= 0 && idx < audioBuffer.length){
+        if (nCh === 1){
+          sample = ch0[idx];
+        } else {
+          let sum = 0;
+          for (let c = 0; c < nCh; c++) sum += audioBuffer.getChannelData(c)[idx];
+          sample = sum / nCh;
+        }
+        sumSq += sample*sample; count++;
+      }
+      // Hann window over the real M-sample analysis window
+      const w = 0.5 - 0.5*Math.cos(2*Math.PI*i/(M-1));
+      re[i] = sample * w;
+      im[i] = 0;
+    }
+    // remaining N-M samples stay zero (the zero-padding)
+    const rms = count ? Math.sqrt(sumSq/count) : 0;
+
+    fftInPlace(re, im);
+
+    const half = N/2;
+    const freqs = new Float64Array(half);
+    const mags = new Float64Array(half);
+    const dbs = new Float64Array(half);
+    for (let k = 0; k < half; k++){
+      const mag = Math.sqrt(re[k]*re[k] + im[k]*im[k]) / (M/2);
+      freqs[k] = k * sr / N;
+      mags[k] = mag;
+      dbs[k] = 20*Math.log10(mag + 1e-12);
+    }
+
+    // peak picking: local maxima above noise floor
+    const peaks = [];
+    const floor = -90;
+    for (let k = 2; k < half-2; k++){
+      if (dbs[k] > floor && dbs[k] > dbs[k-1] && dbs[k] >= dbs[k+1]){
+        peaks.push({freq: freqs[k], db: dbs[k], mag: mags[k]});
+      }
+    }
+    peaks.sort((a,b) => b.db - a.db);
+    // de-dup peaks within 40 Hz of a stronger peak already kept
+    const kept = [];
+    for (const p of peaks){
+      if (kept.every(q => Math.abs(q.freq - p.freq) > 40)) kept.push(p);
+      if (kept.length >= 10) break;
+    }
+
+    return { freqs, mags, dbs, peaks: kept, rms, sampleRate: sr, N, M, time };
+  }
+
+  // ---------------- Library management ----------------
+  function addFiles(fileArr){
+    [...fileArr].forEach(file => {
+      if (!/\.wav$/i.test(file.name) && file.type !== 'audio/wav' && file.type !== 'audio/x-wav') return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        const wavInfo = parseWavHeader(arrayBuffer.slice(0));
+        try{
+          const tmpCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const audioBuffer = await tmpCtx.decodeAudioData(arrayBuffer.slice(0));
+          const blob = new Blob([arrayBuffer], {type:'audio/wav'});
+          const url = URL.createObjectURL(blob);
+          const entry = {
+            id: uid(), name: file.name, size: file.size,
+            url, audioBuffer, wavInfo
+          };
+          library.push(entry);
+          sortByName(library);
+          renderFileList();
+          renderCompareRows();
+          if (activeId === null) selectFile(entry.id);
+          tmpCtx.close();
+        }catch(err){
+          console.error('Could not decode', file.name, err);
+          alert(`Couldn't decode "${file.name}" as a WAV file.`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function renderFileList(){
+    fileCount.textContent = `${library.length} loaded`;
+    if (library.length === 0){
+      fileList.innerHTML = '<div class="empty-note">No files yet. Drop or select .wav files above, or load some from your local folder — files picked from your computer here are session-only.</div>';
+      return;
+    }
+    fileList.innerHTML = '';
+    library.forEach(entry => {
+      const div = document.createElement('div');
+      div.className = 'file-item' + (entry.id === activeId ? ' active' : '');
+      const dur = entry.audioBuffer ? fmtTime(entry.audioBuffer.duration) : '--';
+
+      const row = document.createElement('div');
+      row.className = 'fi-row';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'fname';
+      nameSpan.textContent = entry.name;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'fi-remove';
+      removeBtn.innerHTML = '&times;';
+      removeBtn.title = 'Remove this file';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeFile(entry.id);
+      });
+      row.appendChild(nameSpan);
+      row.appendChild(removeBtn);
+
+      const metaSpan = document.createElement('span');
+      metaSpan.className = 'fmeta';
+      metaSpan.textContent = `${dur} · ${fmtBytes(entry.size)}`;
+
+      div.appendChild(row);
+      div.appendChild(metaSpan);
+      div.addEventListener('click', () => selectFile(entry.id));
+      fileList.appendChild(div);
+    });
+  }
+
+  function removeFile(id){
+    const idx = library.findIndex(f => f.id === id);
+    if (idx === -1) return;
+    const entry = library[idx];
+    const wasActive = activeId === entry.id;
+    library.splice(idx, 1);
+    if (entry.url) URL.revokeObjectURL(entry.url);
+
+    if (wasActive){
+      stopPlaybackInternal();
+      if (audioEl){ audioEl.pause(); audioEl.src = ''; audioEl = null; }
+      activeId = null;
+      if (library.length){
+        selectFile(library[0].id);
+      } else {
+        nowPlayingLabel.textContent = 'No file selected';
+        curTimeEl.textContent = '0:00.000';
+        durTimeEl.textContent = '0:00.000';
+        scrub.value = 0;
+        scrub.disabled = true;
+        playBtn.disabled = true;
+        stopBtn.disabled = true;
+        sampleBtn.disabled = true;
+        resetSheet();
+        resetScreen('idle');
+      }
+    }
+    renderFileList();
+    renderCompareRows();
+  }
+
+  // ---------------- Compare page ----------------
+  function renderCompareRows(){
+    compareFileCount.textContent = `${library.length} loaded`;
+    if (library.length === 0){
+      compareRows.innerHTML = '<div class="empty-note">No files yet.</div>';
+      return;
+    }
+    compareRows.innerHTML = '';
+    library.forEach(entry => {
+      if (entry.compareFrac === undefined) entry.compareFrac = 0;
+      const dur = entry.audioBuffer ? entry.audioBuffer.duration : 0;
+
+      const row = document.createElement('div');
+      row.className = 'compare-row';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'cr-name';
+      nameEl.textContent = entry.name;
+
+      const waveWrap = document.createElement('div');
+      waveWrap.className = 'cr-wave-wrap';
+      const waveCanvasRow = document.createElement('canvas');
+      waveCanvasRow.className = 'cr-wave';
+      waveCanvasRow.width = 1200;
+      waveCanvasRow.height = 130;
+      waveWrap.appendChild(waveCanvasRow);
+
+      const controls = document.createElement('div');
+      controls.className = 'cr-controls';
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'cr-time';
+      timeEl.textContent = fmtTime(entry.compareFrac * dur);
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.className = 'cr-slider';
+      slider.min = 0; slider.max = 1000; slider.step = 1;
+      slider.value = Math.round(entry.compareFrac * 1000);
+
+      function setMoment(frac){
+        entry.compareFrac = Math.min(1, Math.max(0, frac));
+        slider.value = Math.round(entry.compareFrac * 1000);
+        timeEl.textContent = fmtTime(entry.compareFrac * dur);
+        if (entry.audioBuffer) drawWaveformOverview(waveCanvasRow, entry.audioBuffer, entry.compareFrac, dur);
+        schedulePreview(entry, entry.compareFrac * dur);
+      }
+
+      slider.addEventListener('input', () => setMoment(slider.value/1000));
+
+      let rowDragging = false;
+      function seekFromRowEvent(clientX){
+        const rect = waveCanvasRow.getBoundingClientRect();
+        const frac = (clientX - rect.left) / rect.width;
+        setMoment(frac);
+      }
+      waveCanvasRow.addEventListener('pointerdown', (e) => { rowDragging = true; seekFromRowEvent(e.clientX); });
+      window.addEventListener('pointermove', (e) => { if (rowDragging) seekFromRowEvent(e.clientX); });
+      window.addEventListener('pointerup', () => { rowDragging = false; });
+
+      controls.appendChild(slider);
+      controls.appendChild(timeEl);
+
+      const actions = document.createElement('div');
+      actions.className = 'cr-actions';
+
+      const sampleWrap = document.createElement('div');
+      sampleWrap.className = 'cr-sample';
+      const offsetInput = document.createElement('input');
+      offsetInput.type = 'number';
+      offsetInput.min = '0'; offsetInput.step = '0.001';
+      offsetInput.value = entry.crSampleOffset !== undefined ? entry.crSampleOffset : '0.01';
+      offsetInput.title = 'Offset (seconds) after the loudest peak';
+      const sampleBtnRow = document.createElement('button');
+      sampleBtnRow.className = 'cr-sample-btn';
+      sampleBtnRow.textContent = 'Sample';
+      sampleBtnRow.title = "Drag the marker to just before a tap, then Sample jumps to its loudest point plus the offset";
+      sampleBtnRow.addEventListener('click', () => {
+        if (!entry.audioBuffer) return;
+        entry.crSampleOffset = parseFloat(offsetInput.value) || 0;
+        const offsetT = Math.max(0, entry.crSampleOffset);
+        const peakTime = findLoudestPeakForward(entry.audioBuffer, entry.compareFrac * dur, 0.5);
+        const sampleTime = Math.min(dur, peakTime + offsetT);
+        setMoment(dur ? sampleTime/dur : 0);
+      });
+      sampleWrap.appendChild(offsetInput);
+      sampleWrap.appendChild(sampleBtnRow);
+
+      const addBtn = document.createElement('button');
+      addBtn.className = 'cr-add';
+      addBtn.textContent = 'Add Snapshot';
+      addBtn.addEventListener('click', () => {
+        addCompareTrace(entry, entry.compareFrac * dur);
+      });
+
+      actions.appendChild(sampleWrap);
+      actions.appendChild(addBtn);
+
+      row.appendChild(nameEl);
+      row.appendChild(waveWrap);
+      row.appendChild(controls);
+      row.appendChild(actions);
+      compareRows.appendChild(row);
+
+      if (entry.audioBuffer) drawWaveformOverview(waveCanvasRow, entry.audioBuffer, entry.compareFrac, dur);
+    });
+  }
+
+  function addCompareTrace(entry, time){
+    if (!entry.audioBuffer) return;
+    const capture = computeSpectrumAt(entry.audioBuffer, time, 4096, 65536);
+    const color = TRACE_COLOURS[compareIdSeq % TRACE_COLOURS.length];
+    compareIdSeq++;
+    compareTraces.push({ id: 'ct' + compareIdSeq, color, entryName: entry.name, time, capture, manualOffset: 0 });
+    renderCompareLegend();
+    drawCompareGraph();
+  }
+
+  function removeCompareTrace(id){
+    compareTraces = compareTraces.filter(t => t.id !== id);
+    renderCompareLegend();
+    drawCompareGraph();
+  }
+
+  function renderCompareLegend(){
+    if (compareTraces.length === 0){
+      compareLegend.innerHTML = '<div class="empty-note">Nothing added yet — pick a moment on the left and click "Add Snapshot".</div>';
+      return;
+    }
+    compareLegend.innerHTML = '';
+    compareTraces.forEach(t => {
+      const top = t.capture.peaks[0];
+      const item = document.createElement('div');
+      item.className = 'legend-item';
+
+      const swatch = document.createElement('span');
+      swatch.className = 'legend-swatch';
+      swatch.style.background = t.color;
+
+      const offsetTag = t.manualOffset !== 0
+        ? ` · shifted ${t.manualOffset > 0 ? '+' : ''}${t.manualOffset.toFixed(1)} dB`
+        : '';
+
+      const info = document.createElement('div');
+      info.className = 'legend-info';
+      info.innerHTML = `<div class="li-name">${t.entryName} @ ${fmtTime(t.time)}</div>
+        <div class="li-meta">${top ? `peak ${fmtHz(top.freq)} · ${top.db.toFixed(1)} dBFS` : 'no peak found'}${offsetTag}</div>`;
+
+      if (t.manualOffset !== 0){
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'legend-remove';
+        resetBtn.innerHTML = '&#8635;';
+        resetBtn.title = 'Reset vertical shift';
+        resetBtn.addEventListener('click', () => {
+          t.manualOffset = 0;
+          renderCompareLegend();
+          drawCompareGraph();
+        });
+        item.appendChild(swatch);
+        item.appendChild(info);
+        item.appendChild(resetBtn);
+      } else {
+        item.appendChild(swatch);
+        item.appendChild(info);
+      }
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'legend-remove';
+      removeBtn.innerHTML = '&times;';
+      removeBtn.title = 'Remove this trace';
+      removeBtn.addEventListener('click', () => removeCompareTrace(t.id));
+      item.appendChild(removeBtn);
+      compareLegend.appendChild(item);
+    });
+  }
+
+  // ---------------- Live preview (while choosing a snapshot moment) ----------------
+  function schedulePreview(entry, time){
+    pendingPreviewEntry = entry;
+    pendingPreviewTime = time;
+    if (previewScheduled) return;
+    previewScheduled = true;
+    requestAnimationFrame(() => {
+      previewScheduled = false;
+      if (pendingPreviewEntry) renderPreview(pendingPreviewEntry, pendingPreviewTime);
+    });
+  }
+
+  function renderPreview(entry, time){
+    if (!entry.audioBuffer) return;
+    const capture = computeSpectrumAt(entry.audioBuffer, time, 4096, 65536);
+    lastPreviewCapture = capture;
+    previewLabel.textContent = `— ${entry.name} @ ${fmtTime(time)}`;
+    drawPreviewSpectrum(capture);
+  }
+
+  function drawPreviewSpectrum(capture){
+    const ctx = previewCanvas.getContext('2d');
+    const w = previewCanvas.width, h = previewCanvas.height;
+    ctx.clearRect(0,0,w,h);
+    drawGrid(ctx, w, h);
+
+    const curveVals = new Array(w);
+    for (let x = 0; x < w; x++) curveVals[x] = getSmoothedDbAtFreq(capture, xToFreq(x, w));
+    const { dbMin, dbMax } = autoDbRange(curveVals);
+
+    ctx.fillStyle = '#6b6b64';
+    ctx.font = '13px "JetBrains Mono", monospace';
+    for (let i = 0; i <= 6; i++){
+      const dbAtLine = dbMax - (i/6)*(dbMax - dbMin);
+      const y = (h/6)*i;
+      ctx.fillText(dbAtLine.toFixed(0) + ' dB', 6, Math.max(13, y - 3));
+    }
+
+    ctx.beginPath();
+    ctx.strokeStyle = '#2f6fb0';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = 'rgba(47,111,176,0.3)';
+    ctx.shadowBlur = 5;
+    for (let x = 0; x < w; x++){
+      const db = Math.max(dbMin, Math.min(dbMax, curveVals[x]));
+      const norm = (db - dbMin)/(dbMax - dbMin);
+      const y = h - norm*h;
+      if (x === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    const peaksInRange = capture.peaks.filter(p => p.freq >= FREQ_MIN && p.freq <= FREQ_MAX);
+    if (peaksInRange.length){
+      const top = peaksInRange[0];
+      const x = freqToX(top.freq, w);
+      ctx.strokeStyle = 'rgba(47,111,176,0.45)';
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#2f6fb0';
+      ctx.font = '15px "JetBrains Mono", monospace';
+      const lx = Math.min(w-150, x+8);
+      ctx.fillText(fmtHz(top.freq), lx, 18);
+      ctx.font = '13px "JetBrains Mono", monospace';
+      ctx.fillText(`${top.db.toFixed(1)} dBFS`, lx, 33);
+    }
+  }
+
+  function resetPreview(){
+    previewLabel.textContent = '— drag a waveform on the left to preview it here';
+    const ctx = previewCanvas.getContext('2d');
+    ctx.clearRect(0,0,previewCanvas.width, previewCanvas.height);
+    drawGrid(ctx, previewCanvas.width, previewCanvas.height);
+  }
+
+  function drawCompareGraph(){
+    const ctx = compareCanvas.getContext('2d');
+    const w = compareCanvas.width, h = compareCanvas.height;
+    ctx.clearRect(0,0,w,h);
+    drawGrid(ctx, w, h);
+
+    // dBFS axis on the left (comparison uses raw levels, not peak-normalised,
+    // so absolute loudness differences between files stay visible)
+    const traceCurves = compareTraces.map(t => {
+      const vals = new Array(w);
+      for (let x = 0; x < w; x++) vals[x] = getSmoothedDbAtFreq(t.capture, xToFreq(x, w)) + t.manualOffset;
+      return vals;
+    });
+    const allVals = traceCurves.length ? [].concat(...traceCurves) : [];
+    const { dbMin, dbMax } = autoDbRange(allVals);
+    compareDbMin = dbMin; compareDbMax = dbMax;
+
+    ctx.fillStyle = '#6b6b64';
+    ctx.font = '13px "JetBrains Mono", monospace';
+    for (let i = 0; i <= 6; i++){
+      const dbAtLine = dbMax - (i/6)*(dbMax - dbMin);
+      const y = (h/6)*i;
+      ctx.fillText(dbAtLine.toFixed(0) + ' dB', 6, Math.max(13, y - 3));
+    }
+
+    compareTraces.forEach((t, ti) => {
+      ctx.beginPath();
+      ctx.strokeStyle = t.color;
+      ctx.lineWidth = (t.id === draggingTraceId) ? 3 : 2;
+      for (let x = 0; x < w; x++){
+        const db = Math.max(dbMin, Math.min(dbMax, traceCurves[ti][x]));
+        const norm = (db - dbMin)/(dbMax - dbMin);
+        const y = h - norm*h;
+        if (x === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    });
+
+    if (compareCursorFreq != null && compareCursorFreq >= FREQ_MIN && compareCursorFreq <= FREQ_MAX){
+      const cx = freqToX(compareCursorFreq, w);
+      ctx.strokeStyle = '#111111';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,h); ctx.stroke();
+      ctx.setLineDash([]);
+      updateCompareCursorInfo();
+    }
+  }
+
+  // Canvas-pixel y-position of a trace's (offset-adjusted) curve at a given frequency
+  function traceYAtFreq(trace, freq, w, h){
+    const db = getSmoothedDbAtFreq(trace.capture, freq) + trace.manualOffset;
+    const clamped = Math.max(compareDbMin, Math.min(compareDbMax, db));
+    const norm = (clamped - compareDbMin)/(compareDbMax - compareDbMin);
+    return h - norm*h;
+  }
+
+  function updateCompareCursorInfo(){
+    if (compareCursorFreq == null || compareTraces.length === 0){
+      compareCursorInfo.innerHTML = 'Drag on the graph to read off levels at a chosen frequency across every trace — or grab a curve directly to slide it up/down and line up peaks.';
+      return;
+    }
+    const rows = compareTraces.map(t => {
+      const db = getSmoothedDbAtFreq(t.capture, compareCursorFreq) + t.manualOffset;
+      const offsetTag = t.manualOffset !== 0 ? ` (shifted ${t.manualOffset>0?'+':''}${t.manualOffset.toFixed(1)} dB)` : '';
+      return `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+        <span class="legend-swatch" style="background:${t.color};"></span>
+        <span>${t.entryName} @ ${fmtTime(t.time)} — <b style="color:var(--text);">${db.toFixed(1)} dBFS</b>${offsetTag}</span>
+      </div>`;
+    }).join('');
+    compareCursorInfo.innerHTML = `<div>Cursor: <b style="color:var(--text);">${fmtHz(compareCursorFreq)}</b></div>${rows}`;
+  }
+
+  function updateCompareCursorFromEvent(clientX){
+    const rect = compareCanvas.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    compareCursorFreq = xToFreq(frac, 1);
+    drawCompareGraph();
+  }
+
+  const TRACE_PICK_THRESHOLD = 28; // canvas px — how close a click must be to a curve to grab it
+
+  compareCanvas.addEventListener('pointerdown', (evt) => {
+    const rect = compareCanvas.getBoundingClientRect();
+    const w = compareCanvas.width, h = compareCanvas.height;
+    const canvasX = (evt.clientX - rect.left) / rect.width * w;
+    const canvasY = (evt.clientY - rect.top) / rect.height * h;
+    const freq = xToFreq(canvasX, w);
+
+    let nearest = null, nearestDist = Infinity;
+    compareTraces.forEach(t => {
+      const y = traceYAtFreq(t, freq, w, h);
+      const dist = Math.abs(y - canvasY);
+      if (dist < nearestDist){ nearestDist = dist; nearest = t; }
+    });
+
+    if (nearest && nearestDist <= TRACE_PICK_THRESHOLD){
+      draggingTraceId = nearest.id;
+      dragStartClientY = evt.clientY;
+      dragStartOffset = nearest.manualOffset;
+      drawCompareGraph();
+    } else {
+      draggingCompareCursor = true;
+      updateCompareCursorFromEvent(evt.clientX);
+    }
+  });
+  window.addEventListener('pointermove', (evt) => {
+    if (draggingTraceId){
+      const t = compareTraces.find(tr => tr.id === draggingTraceId);
+      if (!t) return;
+      const rect = compareCanvas.getBoundingClientRect();
+      const scale = compareCanvas.height / rect.height;
+      const deltaCanvasY = (evt.clientY - dragStartClientY) * scale;
+      const deltaDb = -deltaCanvasY / compareCanvas.height * (compareDbMax - compareDbMin);
+      t.manualOffset = dragStartOffset + deltaDb;
+      drawCompareGraph();
+      return;
+    }
+    if (draggingCompareCursor) updateCompareCursorFromEvent(evt.clientX);
+  });
+  window.addEventListener('pointerup', () => {
+    if (draggingTraceId){ draggingTraceId = null; renderCompareLegend(); drawCompareGraph(); }
+    draggingCompareCursor = false;
+  });
+
+  clearCompareBtn.addEventListener('click', () => {
+    compareTraces = [];
+    compareCursorFreq = null;
+    renderCompareLegend();
+    drawCompareGraph();
+  });
+
+  fileInputCompare.addEventListener('change', (e) => addFiles(e.target.files));
+  ;['dragover','dragenter'].forEach(evtName => {
+    dropzoneCompare.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneCompare.classList.add('drag'); });
+  });
+  ;['dragleave','drop'].forEach(evtName => {
+    dropzoneCompare.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneCompare.classList.remove('drag'); });
+  });
+  dropzoneCompare.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+
+  // ---------------- Tap Analyser page ----------------
+  const TAP_COLOURS = ['#0f8a4c','#b5690a','#2f6fb0','#a02b9e','#c23b2e','#0a8a8a','#8a7a00','#555550'];
+
+  function addTapFiles(fileArr){
+    [...fileArr].forEach(file => {
+      if (!/\.wav$/i.test(file.name) && file.type !== 'audio/wav' && file.type !== 'audio/x-wav') return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        try{
+          const tmpCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const audioBuffer = await tmpCtx.decodeAudioData(arrayBuffer.slice(0));
+          const entry = {
+            id: uid(), name: file.name, size: file.size, audioBuffer,
+            skipStart:'', skipEnd:'', included:true,
+            _rawBuffer: arrayBuffer.slice(0)
+          };
+          tapLibrary.push(entry);
+          sortByName(tapLibrary);
+          renderTapRows();
+          tmpCtx.close();
+        }catch(err){
+          console.error('Could not decode', file.name, err);
+          alert(`Couldn't decode "${file.name}" as a WAV file.`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function drawTapRowWave(canvas, entry){
+    drawWaveformOverview(canvas, entry.audioBuffer);
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const dur = entry.audioBuffer.duration || 1;
+    const ss = parseFloat(entry.skipStart);
+    const se = parseFloat(entry.skipEnd);
+    ctx.fillStyle = 'rgba(194,59,46,0.16)';
+    if (isFinite(ss) && ss > 0) ctx.fillRect(0, 0, Math.min(w, (ss/dur)*w), h);
+    if (isFinite(se) && se > 0){
+      const seStart = Math.max(0, dur-se);
+      ctx.fillRect(Math.max(0,(seStart/dur)*w), 0, w - Math.max(0,(seStart/dur)*w), h);
+    }
+  }
+
+  function renderTapRows(){
+    const selectedCount = tapLibrary.filter(e => e.included !== false).length;
+    tapFileCount.textContent = tapLibrary.length
+      ? `${tapLibrary.length} loaded · ${selectedCount} selected`
+      : '0 loaded';
+    if (!tapLibrary.length){
+      tapRows.innerHTML = '<div class="empty-note">No files yet.</div>';
+      return;
+    }
+    tapRows.innerHTML = '';
+    tapLibrary.forEach(entry => {
+      if (entry.included === undefined) entry.included = true;
+      const row = document.createElement('div');
+      row.className = 'tap-row' + (entry.included ? '' : ' excluded');
+
+      const head = document.createElement('div');
+      head.className = 'tr-head';
+
+      const includeWrap = document.createElement('label');
+      includeWrap.className = 'tr-include';
+      includeWrap.title = 'Include this recording in the analysis and scatter graph';
+      const includeInput = document.createElement('input');
+      includeInput.type = 'checkbox';
+      includeInput.checked = entry.included;
+      includeInput.addEventListener('change', () => {
+        entry.included = includeInput.checked;
+        row.classList.toggle('excluded', !entry.included);
+        tapFileCount.textContent = `${tapLibrary.length} loaded · ${tapLibrary.filter(e => e.included !== false).length} selected`;
+      });
+      includeWrap.appendChild(includeInput);
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'tr-name';
+      nameEl.textContent = entry.name;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'tr-remove';
+      removeBtn.innerHTML = '&times;';
+      removeBtn.title = 'Remove this file';
+      removeBtn.addEventListener('click', () => {
+        tapLibrary = tapLibrary.filter(f => f.id !== entry.id);
+        renderTapRows();
+      });
+      head.appendChild(includeWrap);
+      head.appendChild(nameEl);
+      head.appendChild(removeBtn);
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'tr-wave';
+      canvas.width = 1200; canvas.height = 70;
+
+      const fields = document.createElement('div');
+      fields.className = 'tr-fields';
+
+      const ssField = document.createElement('div');
+      ssField.className = 'tap-field';
+      ssField.innerHTML = '<label>Crop Start (s)</label>';
+      const ssInput = document.createElement('input');
+      ssInput.type = 'number'; ssInput.min = '0'; ssInput.step = '0.1'; ssInput.placeholder = 'auto';
+      ssInput.value = entry.skipStart;
+      ssInput.addEventListener('change', () => { entry.skipStart = ssInput.value; drawTapRowWave(canvas, entry); syncEntryToFolder(entry, 'skipStart', 'skipEnd'); });
+      ssField.appendChild(ssInput);
+
+      const seField = document.createElement('div');
+      seField.className = 'tap-field';
+      seField.innerHTML = '<label>Crop End (s)</label>';
+      const seInput = document.createElement('input');
+      seInput.type = 'number'; seInput.min = '0'; seInput.step = '0.1'; seInput.placeholder = 'none';
+      seInput.value = entry.skipEnd;
+      seInput.addEventListener('change', () => { entry.skipEnd = seInput.value; drawTapRowWave(canvas, entry); syncEntryToFolder(entry, 'skipStart', 'skipEnd'); });
+      seField.appendChild(seInput);
+
+      fields.appendChild(ssField);
+      fields.appendChild(seField);
+
+      row.appendChild(head);
+      row.appendChild(canvas);
+      row.appendChild(fields);
+      tapRows.appendChild(row);
+
+      drawTapRowWave(canvas, entry);
+    });
+  }
+
+  fileInputTap.addEventListener('change', (e) => addTapFiles(e.target.files));
+  ;['dragover','dragenter'].forEach(evtName => {
+    dropzoneTap.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneTap.classList.add('drag'); });
+  });
+  ;['dragleave','drop'].forEach(evtName => {
+    dropzoneTap.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneTap.classList.remove('drag'); });
+  });
+  dropzoneTap.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length) addTapFiles(e.dataTransfer.files);
+  });
+
+  // ---------------- Clustering: file library (mirrors Tap Analyser's) ----------------
+  function addClusterFiles(fileArr){
+    [...fileArr].forEach(file => {
+      if (!/\.wav$/i.test(file.name) && file.type !== 'audio/wav' && file.type !== 'audio/x-wav') return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        try{
+          const tmpCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const audioBuffer = await tmpCtx.decodeAudioData(arrayBuffer.slice(0));
+          const entry = {
+            id: uid(), name: file.name, size: file.size, audioBuffer,
+            cropStart:'', cropEnd:'', included:true,
+            _rawBuffer: arrayBuffer.slice(0)
+          };
+          clusterLibrary.push(entry);
+          sortByName(clusterLibrary);
+          renderClusterRows();
+          tmpCtx.close();
+        }catch(err){
+          console.error('Could not decode', file.name, err);
+          alert(`Couldn't decode "${file.name}" as a WAV file.`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function drawClusterRowWave(canvas, entry){
+    drawWaveformOverview(canvas, entry.audioBuffer);
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const dur = entry.audioBuffer.duration || 1;
+    const cs = parseFloat(entry.cropStart);
+    const ce = parseFloat(entry.cropEnd);
+    ctx.fillStyle = 'rgba(194,59,46,0.16)';
+    if (isFinite(cs) && cs > 0) ctx.fillRect(0, 0, Math.min(w, (cs/dur)*w), h);
+    if (isFinite(ce) && ce > 0){
+      const ceStart = Math.max(0, dur-ce);
+      ctx.fillRect(Math.max(0,(ceStart/dur)*w), 0, w - Math.max(0,(ceStart/dur)*w), h);
+    }
+  }
+
+  function renderClusterRows(){
+    const selectedCount = clusterLibrary.filter(e => e.included !== false).length;
+    clusterFileCount.textContent = clusterLibrary.length
+      ? `${clusterLibrary.length} loaded · ${selectedCount} selected`
+      : '0 loaded';
+    if (!clusterLibrary.length){
+      clusterRows.innerHTML = '<div class="empty-note">No files yet.</div>';
+      return;
+    }
+    clusterRows.innerHTML = '';
+    clusterLibrary.forEach(entry => {
+      if (entry.included === undefined) entry.included = true;
+      const row = document.createElement('div');
+      row.className = 'tap-row' + (entry.included ? '' : ' excluded');
+
+      const head = document.createElement('div');
+      head.className = 'tr-head';
+
+      const includeWrap = document.createElement('label');
+      includeWrap.className = 'tr-include';
+      includeWrap.title = 'Include this recording in the clustering run';
+      const includeInput = document.createElement('input');
+      includeInput.type = 'checkbox';
+      includeInput.checked = entry.included;
+      includeInput.addEventListener('change', () => {
+        entry.included = includeInput.checked;
+        row.classList.toggle('excluded', !entry.included);
+        clusterFileCount.textContent = `${clusterLibrary.length} loaded · ${clusterLibrary.filter(e => e.included !== false).length} selected`;
+      });
+      includeWrap.appendChild(includeInput);
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'tr-name';
+      nameEl.textContent = entry.name;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'tr-remove';
+      removeBtn.innerHTML = '&times;';
+      removeBtn.title = 'Remove this file';
+      removeBtn.addEventListener('click', () => {
+        clusterLibrary = clusterLibrary.filter(f => f.id !== entry.id);
+        renderClusterRows();
+      });
+      head.appendChild(includeWrap);
+      head.appendChild(nameEl);
+      head.appendChild(removeBtn);
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'tr-wave';
+      canvas.width = 1200; canvas.height = 70;
+
+      const fields = document.createElement('div');
+      fields.className = 'tr-fields';
+
+      const csField = document.createElement('div');
+      csField.className = 'tap-field';
+      csField.innerHTML = '<label>Crop Start (s)</label>';
+      const csInput = document.createElement('input');
+      csInput.type = 'number'; csInput.min = '0'; csInput.step = '0.1'; csInput.placeholder = '0';
+      csInput.value = entry.cropStart;
+      csInput.addEventListener('change', () => { entry.cropStart = csInput.value; drawClusterRowWave(canvas, entry); syncEntryToFolder(entry, 'cropStart', 'cropEnd'); });
+      csField.appendChild(csInput);
+
+      const ceField = document.createElement('div');
+      ceField.className = 'tap-field';
+      ceField.innerHTML = '<label>Crop End (s)</label>';
+      const ceInput = document.createElement('input');
+      ceInput.type = 'number'; ceInput.min = '0'; ceInput.step = '0.1'; ceInput.placeholder = '0';
+      ceInput.value = entry.cropEnd;
+      ceInput.addEventListener('change', () => { entry.cropEnd = ceInput.value; drawClusterRowWave(canvas, entry); syncEntryToFolder(entry, 'cropStart', 'cropEnd'); });
+      ceField.appendChild(ceInput);
+
+      fields.appendChild(csField);
+      fields.appendChild(ceField);
+
+      row.appendChild(head);
+      row.appendChild(canvas);
+      row.appendChild(fields);
+      clusterRows.appendChild(row);
+
+      drawClusterRowWave(canvas, entry);
+    });
+  }
+
+  fileInputCluster.addEventListener('change', (e) => addClusterFiles(e.target.files));
+  ;['dragover','dragenter'].forEach(evtName => {
+    dropzoneCluster.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneCluster.classList.add('drag'); });
+  });
+  ;['dragleave','drop'].forEach(evtName => {
+    dropzoneCluster.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneCluster.classList.remove('drag'); });
+  });
+  dropzoneCluster.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length) addClusterFiles(e.dataTransfer.files);
+  });
+
+  // ---------------- File Folder page ----------------
+  // The one shared, persisted library. Files added here (and their Crop
+  // Start / Crop End) are saved to IndexedDB and can be pulled into any of
+  // the four tools above via their "Load from local folder" button.
+  // Shared decode/persist path for both single-file(s) upload and whole-
+  // folder upload — each file lands in `targetFolderId` (null = root).
+  function ingestFolderFiles(fileArr, targetFolderId){
+    [...fileArr].forEach(file => {
+      if (!/\.wav$/i.test(file.name) && file.type !== 'audio/wav' && file.type !== 'audio/x-wav') return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        try{
+          const tmpCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const audioBuffer = await tmpCtx.decodeAudioData(arrayBuffer.slice(0));
+          const entry = {
+            id: uid(), name: file.name, size: file.size, audioBuffer,
+            skipStart:'', skipEnd:'', folderId: targetFolderId,
+            _rawBuffer: arrayBuffer.slice(0)
+          };
+          folderLibrary.push(entry);
+          sortByName(folderLibrary);
+          persistFolderEntry(entry);
+          renderFolderRows();
+          tmpCtx.close();
+        }catch(err){
+          console.error('Could not decode', file.name, err);
+          alert(`Couldn't decode "${file.name}" as a WAV file.`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function addFolderFiles(fileArr){
+    const targetFolderId = currentFolderGroupId; // capture at drop-time, not decode-time
+    ingestFolderFiles(fileArr, targetFolderId);
+  }
+
+  // "Upload a whole folder" — picks up every .wav file in the chosen
+  // computer folder (recursively, via webkitRelativePath) and auto-creates
+  // a matching File Folder group named after the top-level folder, so a
+  // folder full of tap recordings arrives already grouped. Subfolders below
+  // that top level are flattened into the same group. If a group with that
+  // name already exists, the files are merged into it instead of making a
+  // duplicate.
+  function addFolderDirectory(fileArr){
+    const wavFiles = [...fileArr].filter(f => /\.wav$/i.test(f.name) || f.type === 'audio/wav' || f.type === 'audio/x-wav');
+    if (!wavFiles.length){
+      alert('No .wav files found in that folder.');
+      return;
+    }
+    const byTopFolder = new Map();
+    wavFiles.forEach(f => {
+      const rel = f.webkitRelativePath || f.name;
+      const top = rel.includes('/') ? rel.split('/')[0] : 'Uploaded folder';
+      if (!byTopFolder.has(top)) byTopFolder.set(top, []);
+      byTopFolder.get(top).push(f);
+    });
+    byTopFolder.forEach((groupFiles, folderName) => {
+      let group = folderGroups.find(g => g.name === folderName);
+      if (!group){
+        group = { id: uid(), name: folderName };
+        folderGroups.push(group);
+        sortByName(folderGroups);
+        persistFolderGroup(group);
+      }
+      ingestFolderFiles(groupFiles, group.id);
+    });
+    renderFolderRows();
+  }
+
+  // ---- Drag-and-drop file/folder auto-detection for the File Folder
+  // dropzone. Dropping loose files behaves like the normal file picker;
+  // dropping a whole folder is detected via the (widely supported, if
+  // non-standard) File System Entries API and routed through the same
+  // auto-grouping path as picking a folder — all from the one dropzone,
+  // no separate control needed.
+
+  // A FileSystemDirectoryReader's readEntries() is only guaranteed to
+  // return *some* of a directory's entries per call — repeat until it
+  // returns an empty batch.
+  function readAllDirectoryEntries(reader){
+    return new Promise((resolve, reject) => {
+      let all = [];
+      const readBatch = () => {
+        reader.readEntries((batch) => {
+          if (!batch || !batch.length){ resolve(all); return; }
+          all = all.concat(batch);
+          readBatch();
+        }, reject);
+      };
+      readBatch();
+    });
+  }
+
+  // Converts a FileSystemFileEntry into a real File, tagging it with a
+  // webkitRelativePath so it can be treated exactly like a file picked via
+  // an OS folder picker (addFolderDirectory groups by the path's first
+  // segment).
+  function fileFromEntry(entry, relPath){
+    return new Promise((resolve, reject) => {
+      entry.file((file) => {
+        try{ Object.defineProperty(file, 'webkitRelativePath', { value: relPath, configurable:true }); }catch(err){}
+        resolve(file);
+      }, reject);
+    });
+  }
+
+  // Recursively walks a dropped FileSystemEntry (file or directory) into a
+  // flat array of Files, building up each one's relative path as it goes.
+  async function walkDroppedEntry(entry, relPath){
+    if (entry.isFile){
+      const path = relPath ? relPath + '/' + entry.name : entry.name;
+      return [await fileFromEntry(entry, path)];
+    }
+    if (entry.isDirectory){
+      const nextPrefix = relPath ? relPath + '/' + entry.name : entry.name;
+      const children = await readAllDirectoryEntries(entry.createReader());
+      const nested = await Promise.all(children.map(child => walkDroppedEntry(child, nextPrefix)));
+      return nested.flat();
+    }
+    return [];
+  }
+
+  // Inspects everything dropped onto the File Folder dropzone, separating
+  // loose files (-> addFolderFiles, lands wherever you're browsing) from
+  // whole folders (-> addFolderDirectory, auto-grouped) — automatically,
+  // with no separate "upload a folder" control.
+  async function handleFolderDrop(dataTransfer){
+    if (!dataTransfer) return;
+    const items = dataTransfer.items;
+    if (!items || !items.length || typeof items[0].webkitGetAsEntry !== 'function'){
+      // No File System Entries API support in this browser — fall back to
+      // treating everything dropped as loose files.
+      if (dataTransfer.files && dataTransfer.files.length) addFolderFiles(dataTransfer.files);
+      return;
+    }
+    const entries = [...items].map(it => it.webkitGetAsEntry()).filter(Boolean);
+    const looseFiles = [];
+    const dirFiles = [];
+    for (const entry of entries){
+      if (entry.isFile){
+        looseFiles.push(await fileFromEntry(entry, ''));
+      } else if (entry.isDirectory){
+        dirFiles.push(...await walkDroppedEntry(entry, ''));
+      }
+    }
+    if (looseFiles.length) addFolderFiles(looseFiles);
+    if (dirFiles.length) addFolderDirectory(dirFiles);
+  }
+
+  function drawFolderRowWave(canvas, entry){
+    drawWaveformOverview(canvas, entry.audioBuffer);
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const dur = entry.audioBuffer.duration || 1;
+    const ss = parseFloat(entry.skipStart);
+    const se = parseFloat(entry.skipEnd);
+    ctx.fillStyle = 'rgba(194,59,46,0.16)';
+    if (isFinite(ss) && ss > 0) ctx.fillRect(0, 0, Math.min(w, (ss/dur)*w), h);
+    if (isFinite(se) && se > 0){
+      const seStart = Math.max(0, dur-se);
+      ctx.fillRect(Math.max(0,(seStart/dur)*w), 0, w - Math.max(0,(seStart/dur)*w), h);
+    }
+  }
+
+  // Builds a single Hann-windowed FFT (up to 8192 samples, taken from the
+  // middle of the file) for the File Folder's "summary FFT" preview —
+  // respects this entry's Crop Start / Crop End first, same convention used
+  // everywhere else (Crop End = seconds trimmed off the end).
+  function computeFolderSpectrum(entry){
+    const audioBuffer = entry.audioBuffer;
+    const sr = audioBuffer.sampleRate;
+    const nCh = audioBuffer.numberOfChannels;
+    let samples;
+    if (nCh === 1){
+      samples = audioBuffer.getChannelData(0).slice();
+    } else {
+      const n = audioBuffer.length;
+      samples = new Float32Array(n);
+      for (let c = 0; c < nCh; c++){
+        const ch = audioBuffer.getChannelData(c);
+        for (let i = 0; i < n; i++) samples[i] += ch[i]/nCh;
+      }
+    }
+
+    const ssVal = (entry.skipStart||'').trim();
+    const ssSec = ssVal !== '' ? parseFloat(ssVal) : 0;
+    if (isFinite(ssSec) && ssSec > 0){
+      samples = samples.subarray(Math.min(samples.length, Math.round(ssSec*sr)));
+    }
+    const seVal = (entry.skipEnd||'').trim();
+    const seSec = seVal !== '' ? parseFloat(seVal) : 0;
+    if (isFinite(seSec) && seSec > 0){
+      const keepLen = Math.max(1, samples.length - Math.round(seSec*sr));
+      samples = samples.subarray(0, keepLen);
+    }
+    if (samples.length < 16) return null;
+
+    const M = Math.min(8192, samples.length);
+    const startIdx = Math.max(0, Math.floor((samples.length - M) / 2));
+    const windowed = applyHann(samples.subarray(startIdx, startIdx + M));
+    const { freqs, mags } = computeFftMagExact(windowed, sr);
+    return { freqs, mags, sr };
+  }
+
+  function drawFolderSpectrum(canvas, entry){
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle = '#f4f4f0';
+    ctx.fillRect(0,0,w,h);
+
+    const spec = computeFolderSpectrum(entry);
+    if (!spec){
+      ctx.fillStyle = '#8f8f86';
+      ctx.font = '13px "JetBrains Mono", monospace';
+      ctx.fillText('Not enough audio to analyse (check Crop Start / Crop End).', 10, h/2);
+      return;
+    }
+    const { freqs, mags, sr } = spec;
+    const fMin = 0, fMax = Math.min(2000, sr/2);
+    const binHz = freqs[1] - freqs[0];
+
+    ctx.strokeStyle = '#e2e2dc';
+    ctx.lineWidth = 1;
+    const nTicks = 5;
+    for (let i = 0; i <= nTicks; i++){
+      const f = fMin + (i/nTicks)*(fMax-fMin);
+      const x = (f-fMin)/(fMax-fMin)*w;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+      ctx.fillStyle = '#6b6b64';
+      ctx.font = '11px "JetBrains Mono", monospace';
+      const label = fmtHz(f);
+      const lx = Math.min(w - ctx.measureText(label).width - 4, Math.max(2, x+3));
+      ctx.fillText(label, lx, h-4);
+    }
+
+    const loBin = Math.max(0, Math.floor(fMin/binHz));
+    const hiBin = Math.min(freqs.length-1, Math.ceil(fMax/binHz));
+    const dbVals = [];
+    for (let k = loBin; k <= hiBin; k++) dbVals.push(20*Math.log10(mags[k]+1e-12));
+    const { dbMin, dbMax } = autoDbRange(dbVals);
+
+    ctx.beginPath();
+    ctx.strokeStyle = '#b5690a';
+    ctx.lineWidth = 1.75;
+    for (let x = 0; x < w; x++){
+      const f = fMin + (x/w)*(fMax-fMin);
+      const idx = Math.max(0, Math.min(freqs.length-1, Math.round(f/binHz)));
+      const db = Math.max(dbMin, Math.min(dbMax, 20*Math.log10(mags[idx]+1e-12)));
+      const norm = (db-dbMin)/(dbMax-dbMin);
+      const y = h - norm*h;
+      if (x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+
+    let peakDb = -Infinity, peakFreq = 0;
+    for (let k = loBin; k <= hiBin; k++){
+      const db = 20*Math.log10(mags[k]+1e-12);
+      if (db > peakDb){ peakDb = db; peakFreq = freqs[k]; }
+    }
+    if (isFinite(peakDb)){
+      const x = (peakFreq-fMin)/(fMax-fMin)*w;
+      ctx.strokeStyle = 'rgba(181,105,10,0.4)';
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#b5690a';
+      ctx.font = '13px "JetBrains Mono", monospace';
+      ctx.fillText(fmtHz(peakFreq), Math.min(w-70, x+6), 14);
+    }
+  }
+
+  // ⋮ menu for a file row: Move (drills into a folder-target sublist),
+  // Rename, Delete.
+  function buildFileMenu(entry){
+    const menu = document.createElement('div');
+    menu.className = 'tr-menu';
+    const state = folderMenuOpen;
+
+    if (state.mode === 'move'){
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'tr-menu-item tr-menu-back';
+      back.textContent = '‹ Back';
+      back.addEventListener('click', (e) => { e.stopPropagation(); folderMenuOpen.mode = 'main'; renderFolderRows(); });
+      menu.appendChild(back);
+
+      if (entry.folderId !== null){
+        const rootBtn = document.createElement('button');
+        rootBtn.type = 'button';
+        rootBtn.className = 'tr-menu-item';
+        rootBtn.textContent = 'File Folder (no folder)';
+        rootBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          entry.folderId = null;
+          persistFolderEntry(entry);
+          folderMenuOpen = null;
+          renderFolderRows();
+        });
+        menu.appendChild(rootBtn);
+      }
+      const targets = folderGroups.filter(g => g.id !== entry.folderId);
+      targets.forEach(g => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tr-menu-item';
+        btn.textContent = g.name;
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          entry.folderId = g.id;
+          persistFolderEntry(entry);
+          folderMenuOpen = null;
+          renderFolderRows();
+        });
+        menu.appendChild(btn);
+      });
+      if (!targets.length && entry.folderId === null){
+        const note = document.createElement('div');
+        note.className = 'tr-menu-note';
+        note.textContent = 'No folders yet — create one first.';
+        menu.appendChild(note);
+      }
+      return menu;
+    }
+
+    const moveBtn = document.createElement('button');
+    moveBtn.type = 'button';
+    moveBtn.className = 'tr-menu-item';
+    moveBtn.textContent = 'Move';
+    moveBtn.addEventListener('click', (e) => { e.stopPropagation(); folderMenuOpen.mode = 'move'; renderFolderRows(); });
+    menu.appendChild(moveBtn);
+
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'tr-menu-item';
+    renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      folderRenaming = {kind:'file', id: entry.id};
+      folderMenuOpen = null;
+      renderFolderRows();
+    });
+    menu.appendChild(renameBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'tr-menu-item danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      folderLibrary = folderLibrary.filter(f => f.id !== entry.id);
+      folderExpandedIds.delete(entry.id);
+      idbDelete('fileFolder', entry.id);
+      folderMenuOpen = null;
+      renderFolderRows();
+    });
+    menu.appendChild(delBtn);
+    return menu;
+  }
+
+  // ⋮ menu for a folder row: Rename, Delete (deleting a folder just
+  // ungroups its files back to the root — it never deletes the files).
+  function buildGroupMenu(group){
+    const menu = document.createElement('div');
+    menu.className = 'tr-menu';
+
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'tr-menu-item';
+    renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      folderRenaming = {kind:'folder', id: group.id};
+      folderMenuOpen = null;
+      renderFolderRows();
+    });
+    menu.appendChild(renameBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'tr-menu-item danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      folderLibrary.forEach(f => {
+        if (f.folderId === group.id){
+          f.folderId = null;
+          persistFolderEntry(f);
+        }
+      });
+      folderGroups = folderGroups.filter(g => g.id !== group.id);
+      idbDelete('fileFolderGroups', group.id);
+      if (currentFolderGroupId === group.id) currentFolderGroupId = null;
+      folderMenuOpen = null;
+      renderFolderRows();
+    });
+    menu.appendChild(delBtn);
+    return menu;
+  }
+
+  function buildFileRow(entry){
+    const isRenaming = folderRenaming && folderRenaming.kind === 'file' && folderRenaming.id === entry.id;
+    const expanded = folderExpandedIds.has(entry.id);
+    const row = document.createElement('div');
+    row.className = 'tap-row' + (expanded ? ' expanded' : '');
+
+    const head = document.createElement('div');
+    head.className = 'tr-head';
+
+    const chevron = document.createElement('div');
+    chevron.className = 'tr-chevron';
+    chevron.innerHTML = '&#9656;';
+
+    if (isRenaming){
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tr-name-input';
+      input.value = entry.name;
+      head.appendChild(chevron);
+      head.appendChild(input);
+      row.appendChild(head);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+      const commit = () => {
+        const v = input.value.trim();
+        if (v && v !== entry.name){ entry.name = v; persistFolderEntry(entry); sortByName(folderLibrary); }
+        folderRenaming = null;
+        renderFolderRows();
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter'){ e.preventDefault(); commit(); }
+        else if (e.key === 'Escape'){ e.preventDefault(); folderRenaming = null; renderFolderRows(); }
+      });
+      return row;
+    }
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'tr-name';
+    nameEl.textContent = entry.name;
+    nameEl.title = 'Click to show/hide waveform, crop times & summary FFT';
+
+    const toggleExpand = () => {
+      if (folderExpandedIds.has(entry.id)) folderExpandedIds.delete(entry.id);
+      else folderExpandedIds.add(entry.id);
+      renderFolderRows();
+    };
+    chevron.addEventListener('click', toggleExpand);
+    nameEl.addEventListener('click', toggleExpand);
+
+    const dotsBtn = document.createElement('button');
+    dotsBtn.type = 'button';
+    dotsBtn.className = 'tr-dots';
+    dotsBtn.title = 'More options';
+    dotsBtn.innerHTML = '&#8942;';
+    dotsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = folderMenuOpen && folderMenuOpen.kind === 'file' && folderMenuOpen.id === entry.id;
+      folderMenuOpen = isOpen ? null : {kind:'file', id: entry.id, mode:'main'};
+      renderFolderRows();
+    });
+
+    head.appendChild(chevron);
+    head.appendChild(nameEl);
+    head.appendChild(dotsBtn);
+    row.appendChild(head);
+
+    if (folderMenuOpen && folderMenuOpen.kind === 'file' && folderMenuOpen.id === entry.id){
+      row.appendChild(buildFileMenu(entry));
+    }
+
+    if (expanded){
+      const body = document.createElement('div');
+      body.className = 'tr-body';
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'tr-wave';
+      canvas.width = 1200; canvas.height = 70;
+
+      const fields = document.createElement('div');
+      fields.className = 'tr-fields';
+
+      const fftCanvasEl = document.createElement('canvas');
+      fftCanvasEl.className = 'tr-fft';
+      fftCanvasEl.width = 1200; fftCanvasEl.height = 110;
+
+      const ssField = document.createElement('div');
+      ssField.className = 'tap-field';
+      ssField.innerHTML = '<label>Crop Start (s)</label>';
+      const ssInput = document.createElement('input');
+      ssInput.type = 'number'; ssInput.min = '0'; ssInput.step = '0.1'; ssInput.placeholder = 'none';
+      ssInput.value = entry.skipStart;
+      ssInput.addEventListener('change', () => {
+        entry.skipStart = ssInput.value;
+        drawFolderRowWave(canvas, entry);
+        drawFolderSpectrum(fftCanvasEl, entry);
+        persistFolderEntry(entry);
+      });
+      ssField.appendChild(ssInput);
+
+      const seField = document.createElement('div');
+      seField.className = 'tap-field';
+      seField.innerHTML = '<label>Crop End (s)</label>';
+      const seInput = document.createElement('input');
+      seInput.type = 'number'; seInput.min = '0'; seInput.step = '0.1'; seInput.placeholder = 'none';
+      seInput.value = entry.skipEnd;
+      seInput.addEventListener('change', () => {
+        entry.skipEnd = seInput.value;
+        drawFolderRowWave(canvas, entry);
+        drawFolderSpectrum(fftCanvasEl, entry);
+        persistFolderEntry(entry);
+      });
+      seField.appendChild(seInput);
+
+      fields.appendChild(ssField);
+      fields.appendChild(seField);
+
+      const fftLabel = document.createElement('div');
+      fftLabel.className = 'tr-fft-label';
+      fftLabel.textContent = 'Summary FFT (crop applied, up to 2 kHz)';
+
+      body.appendChild(canvas);
+      body.appendChild(fields);
+      body.appendChild(fftLabel);
+      body.appendChild(fftCanvasEl);
+      row.appendChild(body);
+
+      drawFolderRowWave(canvas, entry);
+      drawFolderSpectrum(fftCanvasEl, entry);
+    }
+
+    return row;
+  }
+
+  function buildGroupRow(group){
+    const isRenaming = folderRenaming && folderRenaming.kind === 'folder' && folderRenaming.id === group.id;
+    const row = document.createElement('div');
+    row.className = 'tap-row' + (isRenaming ? '' : ' is-group');
+
+    const head = document.createElement('div');
+    head.className = 'tr-head';
+
+    if (isRenaming){
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tr-name-input';
+      input.value = group.name;
+      head.appendChild(input);
+      row.appendChild(head);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+      const commit = () => {
+        const v = input.value.trim();
+        if (v && v !== group.name){ group.name = v; persistFolderGroup(group); sortByName(folderGroups); }
+        folderRenaming = null;
+        renderFolderRows();
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter'){ e.preventDefault(); commit(); }
+        else if (e.key === 'Escape'){ e.preventDefault(); folderRenaming = null; renderFolderRows(); }
+      });
+      return row;
+    }
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'tr-name';
+    nameEl.textContent = group.name;
+    nameEl.title = 'Open this folder';
+
+    const count = folderLibrary.filter(f => f.folderId === group.id).length;
+    const meta = document.createElement('div');
+    meta.className = 'tr-meta';
+    meta.textContent = count + (count === 1 ? ' file' : ' files');
+
+    const dotsBtn = document.createElement('button');
+    dotsBtn.type = 'button';
+    dotsBtn.className = 'tr-dots';
+    dotsBtn.title = 'More options';
+    dotsBtn.innerHTML = '&#8942;';
+    dotsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = folderMenuOpen && folderMenuOpen.kind === 'folder' && folderMenuOpen.id === group.id;
+      folderMenuOpen = isOpen ? null : {kind:'folder', id: group.id, mode:'main'};
+      renderFolderRows();
+    });
+
+    head.appendChild(nameEl);
+    head.appendChild(meta);
+    head.appendChild(dotsBtn);
+    row.appendChild(head);
+
+    row.addEventListener('click', () => {
+      currentFolderGroupId = group.id;
+      renderFolderRows();
+    });
+
+    if (folderMenuOpen && folderMenuOpen.kind === 'folder' && folderMenuOpen.id === group.id){
+      row.appendChild(buildGroupMenu(group));
+    }
+    return row;
+  }
+
+  function renderFolderCrumbs(){
+    folderCrumbs.innerHTML = '';
+    if (folderSearchQuery.trim()) return; // flat cross-folder results while searching
+    if (currentFolderGroupId === null){
+      const cur = document.createElement('span');
+      cur.className = 'fc-cur';
+      cur.textContent = 'File Folder';
+      folderCrumbs.appendChild(cur);
+      return;
+    }
+    const group = folderGroups.find(g => g.id === currentFolderGroupId);
+    const root = document.createElement('span');
+    root.className = 'fc-seg';
+    root.textContent = 'File Folder';
+    root.addEventListener('click', () => { currentFolderGroupId = null; renderFolderRows(); });
+    const sep = document.createElement('span');
+    sep.textContent = '▸';
+    const cur = document.createElement('span');
+    cur.className = 'fc-cur';
+    cur.textContent = group ? group.name : '';
+    folderCrumbs.appendChild(root);
+    folderCrumbs.appendChild(sep);
+    folderCrumbs.appendChild(cur);
+  }
+
+  function renderFolderRows(){
+    renderFolderCrumbs();
+    const q = folderSearchQuery.trim().toLowerCase();
+
+    folderFileCount.textContent = q
+      ? `${folderLibrary.filter(e => e.name.toLowerCase().includes(q)).length} of ${folderLibrary.length} shown`
+      : `${folderLibrary.length} saved`;
+
+    if (!folderLibrary.length && !folderGroups.length && !addingFolderGroup){
+      folderRows.innerHTML = '<div class="empty-note">No files yet.</div>';
+      return;
+    }
+    folderRows.innerHTML = '';
+
+    if (addingFolderGroup && !q){
+      const row = document.createElement('div');
+      row.className = 'tap-row is-group';
+      const head = document.createElement('div');
+      head.className = 'tr-head';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tr-name-input';
+      input.placeholder = 'Folder name';
+      head.appendChild(input);
+      row.appendChild(head);
+      folderRows.appendChild(row);
+      setTimeout(() => input.focus(), 0);
+      const commit = () => {
+        const v = input.value.trim();
+        if (v){
+          const group = { id: uid(), name: v };
+          folderGroups.push(group);
+          sortByName(folderGroups);
+          persistFolderGroup(group);
+        }
+        addingFolderGroup = false;
+        renderFolderRows();
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter'){ e.preventDefault(); commit(); }
+        else if (e.key === 'Escape'){ e.preventDefault(); addingFolderGroup = false; renderFolderRows(); }
+      });
+    }
+
+    if (q){
+      const matchingGroups = folderGroups.filter(g => g.name.toLowerCase().includes(q));
+      const matchingFiles = folderLibrary.filter(e => e.name.toLowerCase().includes(q));
+      if (!matchingGroups.length && !matchingFiles.length){
+        const note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'No files match your search.';
+        folderRows.appendChild(note);
+        return;
+      }
+      if (matchingGroups.length){
+        const lbl = document.createElement('div');
+        lbl.className = 'folder-group-label';
+        lbl.textContent = 'Folders';
+        folderRows.appendChild(lbl);
+        matchingGroups.forEach(g => folderRows.appendChild(buildGroupRow(g)));
+      }
+      const lbl2 = document.createElement('div');
+      lbl2.className = 'folder-group-label';
+      lbl2.textContent = 'Files';
+      folderRows.appendChild(lbl2);
+      if (matchingFiles.length){
+        matchingFiles.forEach(f => folderRows.appendChild(buildFileRow(f)));
+      } else {
+        const note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'No files match your search.';
+        folderRows.appendChild(note);
+      }
+      return;
+    }
+
+    if (currentFolderGroupId === null){
+      if (folderGroups.length){
+        const lbl = document.createElement('div');
+        lbl.className = 'folder-group-label';
+        lbl.textContent = 'Folders';
+        folderRows.appendChild(lbl);
+        folderGroups.forEach(g => folderRows.appendChild(buildGroupRow(g)));
+      }
+      const loose = folderLibrary.filter(f => f.folderId == null);
+      const lbl2 = document.createElement('div');
+      lbl2.className = 'folder-group-label';
+      lbl2.textContent = 'Files';
+      folderRows.appendChild(lbl2);
+      if (loose.length){
+        loose.forEach(f => folderRows.appendChild(buildFileRow(f)));
+      } else {
+        const note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'No ungrouped files.';
+        folderRows.appendChild(note);
+      }
+    } else {
+      const inGroup = folderLibrary.filter(f => f.folderId === currentFolderGroupId);
+      if (inGroup.length){
+        inGroup.forEach(f => folderRows.appendChild(buildFileRow(f)));
+      } else {
+        const note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'This folder is empty. Move files in from File Folder.';
+        folderRows.appendChild(note);
+      }
+    }
+  }
+
+  folderNewFolderBtn.addEventListener('click', () => {
+    currentFolderGroupId = null;
+    folderSearchQuery = '';
+    folderSearchInput.value = '';
+    addingFolderGroup = true;
+    renderFolderRows();
+  });
+
+  folderSearchInput.addEventListener('input', () => {
+    folderSearchQuery = folderSearchInput.value;
+    renderFolderRows();
+  });
+
+  fileInputFolder.addEventListener('change', (e) => { addFolderFiles(e.target.files); e.target.value = ''; });
+  folderDirInput.addEventListener('change', (e) => { addFolderDirectory(e.target.files); e.target.value = ''; });
+
+  // The dropzone is a plain clickable box (not a <label>) so a click can
+  // open a small "Choose files… / Choose a folder…" menu instead of always
+  // jumping straight to the multi-file picker — same single control either
+  // way, drag-and-drop still auto-detects files vs. a whole folder on top.
+  dropzoneFolder.addEventListener('click', (e) => {
+    // Ignore the synthetic click that bubbles up when we programmatically
+    // call .click() on one of the hidden inputs below (fileInputFolder.click()
+    // / folderDirInput.click()) — otherwise it re-toggles the menu open again
+    // right after we just closed it.
+    if (e.target === fileInputFolder || e.target === folderDirInput) return;
+    dropzoneFolderMenu.classList.toggle('open');
+  });
+  dropzoneFolder.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); dropzoneFolderMenu.classList.toggle('open'); }
+  });
+  document.addEventListener('click', (e) => {
+    if (!dropzoneFolder.contains(e.target)) dropzoneFolderMenu.classList.remove('open');
+  });
+  dzChooseFiles.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropzoneFolderMenu.classList.remove('open');
+    fileInputFolder.click();
+  });
+  dzChooseFolder.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropzoneFolderMenu.classList.remove('open');
+    folderDirInput.click();
+  });
+
+  ;['dragover','dragenter'].forEach(evtName => {
+    dropzoneFolder.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneFolder.classList.add('drag'); });
+  });
+  ;['dragleave','drop'].forEach(evtName => {
+    dropzoneFolder.addEventListener(evtName, (e) => { e.preventDefault(); dropzoneFolder.classList.remove('drag'); });
+  });
+  dropzoneFolder.addEventListener('drop', (e) => {
+    handleFolderDrop(e.dataTransfer);
+  });
+
+  // ---------------- Folder picker modal ----------------
+  // Shared "load from local folder" UI, opened from each tool's "Load from
+  // local folder" button. `config` says which working list to add into and
+  // how to turn a folder record into that section's entry shape:
+  //   getTarget() -> the section's current working-list array (fetched
+  //                  fresh at confirm-time, since these arrays get
+  //                  reassigned elsewhere via `x = x.filter(...)`)
+  //   buildEntry(rec) -> a new entry for that section, built from the
+  //                      folder record (reusing its already-decoded
+  //                      audioBuffer rather than re-decoding)
+  //   onAdded() -> re-render (and any other post-add wiring) for that page
+  function openFolderPicker(config){
+    if (!folderLibrary.length){
+      alert('Your local folder is empty. Add files to it from the File Folder tab first.');
+      return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    const box = document.createElement('div');
+    box.className = 'modal-box';
+
+    const header = document.createElement('div');
+    header.className = 'modal-header';
+    const title = document.createElement('h3');
+    title.textContent = 'Load from local folder';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'modal-close';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.title = 'Cancel';
+    closeBtn.addEventListener('click', () => overlay.remove());
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'modal-search-wrap';
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'folder-search';
+    searchInput.placeholder = 'Search files by name…';
+    searchWrap.appendChild(searchInput);
+
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    const checked = new Set();
+    const expandedGroups = new Set();
+    let groupCheckboxes = []; // {cb, memberIds} — kept in sync with `checked` after every render
+
+    function buildFileRow(entry){
+      const row = document.createElement('label');
+      row.className = 'folder-pick-row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = checked.has(entry.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) checked.add(entry.id); else checked.delete(entry.id);
+        syncGroupCheckboxStates();
+      });
+      const info = document.createElement('div');
+      info.className = 'fp-info';
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'fp-name';
+      nameDiv.textContent = entry.name;
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'fp-meta';
+      const trimBits = [
+        entry.skipStart !== '' ? `crop start ${entry.skipStart}s` : null,
+        entry.skipEnd !== '' ? `crop end ${entry.skipEnd}s` : null,
+      ].filter(Boolean).join(' · ');
+      metaDiv.textContent = fmtBytes(entry.size) + (trimBits ? ' · ' + trimBits : '');
+      info.appendChild(nameDiv);
+      info.appendChild(metaDiv);
+      row.appendChild(cb);
+      row.appendChild(info);
+      return row;
+    }
+
+    function syncGroupCheckboxStates(){
+      groupCheckboxes.forEach(({ cb, memberIds }) => {
+        const n = memberIds.filter(id => checked.has(id)).length;
+        cb.checked = n > 0 && n === memberIds.length;
+        cb.indeterminate = n > 0 && n < memberIds.length;
+      });
+    }
+
+    // A folder-group row: checking its box selects/deselects every file in
+    // that folder at once; clicking the name expands it to fine-tune
+    // individual files (each keeps its own checkbox).
+    function buildGroupRow(group, memberFiles){
+      const wrap = document.createElement('div');
+      wrap.className = 'folder-pick-group';
+
+      const head = document.createElement('div');
+      head.className = 'folder-pick-group-head';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.title = `Select all ${memberFiles.length} files in "${group.name}"`;
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', () => {
+        memberFiles.forEach(f => { if (cb.checked) checked.add(f.id); else checked.delete(f.id); });
+        renderPickerList();
+      });
+      groupCheckboxes.push({ cb, memberIds: memberFiles.map(f => f.id) });
+
+      const chevron = document.createElement('span');
+      chevron.className = 'fp-chevron' + (expandedGroups.has(group.id) ? ' open' : '');
+      chevron.innerHTML = '&#9656;';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'fp-group-name';
+      nameSpan.textContent = group.name;
+
+      const metaSpan = document.createElement('span');
+      metaSpan.className = 'fp-meta';
+      metaSpan.textContent = memberFiles.length + (memberFiles.length === 1 ? ' file' : ' files');
+
+      const toggleExpand = () => {
+        if (expandedGroups.has(group.id)) expandedGroups.delete(group.id);
+        else expandedGroups.add(group.id);
+        renderPickerList();
+      };
+      chevron.addEventListener('click', toggleExpand);
+      nameSpan.addEventListener('click', toggleExpand);
+
+      head.appendChild(cb);
+      head.appendChild(chevron);
+      head.appendChild(nameSpan);
+      head.appendChild(metaSpan);
+      wrap.appendChild(head);
+
+      if (expandedGroups.has(group.id)){
+        const nested = document.createElement('div');
+        nested.className = 'folder-pick-nested';
+        memberFiles.forEach(f => nested.appendChild(buildFileRow(f)));
+        wrap.appendChild(nested);
+      }
+      return wrap;
+    }
+
+    function renderPickerList(){
+      body.innerHTML = '';
+      groupCheckboxes = [];
+      const q = searchInput.value.trim().toLowerCase();
+
+      if (q){
+        const matches = folderLibrary.filter(e => e.name.toLowerCase().includes(q));
+        if (!matches.length){
+          const note = document.createElement('div');
+          note.className = 'empty-note';
+          note.textContent = 'No files match your search.';
+          body.appendChild(note);
+        } else {
+          matches.forEach(e => body.appendChild(buildFileRow(e)));
+        }
+        return;
+      }
+
+      if (folderGroups.length){
+        folderGroups.forEach(group => {
+          const members = folderLibrary.filter(f => f.folderId === group.id);
+          if (members.length) body.appendChild(buildGroupRow(group, members));
+        });
+      }
+      const loose = folderLibrary.filter(f => f.folderId == null);
+      loose.forEach(e => body.appendChild(buildFileRow(e)));
+
+      syncGroupCheckboxStates();
+    }
+
+    searchInput.addEventListener('input', renderPickerList);
+    renderPickerList();
+
+    const footer = document.createElement('div');
+    footer.className = 'modal-footer';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'text-btn';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => overlay.remove());
+    const addBtn = document.createElement('button');
+    addBtn.className = 'text-btn';
+    addBtn.textContent = 'Add selected';
+    addBtn.addEventListener('click', () => {
+      const target = config.getTarget();
+      const existingIds = new Set(target.map(e => e.id));
+      let added = 0;
+      checked.forEach(id => {
+        if (existingIds.has(id)) return; // already loaded into this section
+        const rec = folderLibrary.find(f => f.id === id);
+        if (!rec) return;
+        target.push(config.buildEntry(rec));
+        added++;
+      });
+      if (added){
+        sortByName(target);
+        config.onAdded();
+      }
+      overlay.remove();
+    });
+    footer.appendChild(cancelBtn);
+    footer.appendChild(addBtn);
+
+    box.appendChild(header);
+    box.appendChild(searchWrap);
+    box.appendChild(body);
+    box.appendChild(footer);
+    overlay.appendChild(box);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
+  const libraryFolderPickerConfig = {
+    getTarget: () => library,
+    buildEntry: (rec) => ({
+      id: rec.id, name: rec.name, size: rec.size,
+      url: URL.createObjectURL(new Blob([rec._rawBuffer], {type:'audio/wav'})),
+      audioBuffer: rec.audioBuffer, wavInfo: parseWavHeader(rec._rawBuffer.slice(0))
+    }),
+    onAdded: () => {
+      renderFileList();
+      renderCompareRows();
+      if (activeId === null && library.length) selectFile(library[0].id);
+    }
+  };
+  loadFromFolderBtnAnalyze.addEventListener('click', () => openFolderPicker(libraryFolderPickerConfig));
+  loadFromFolderBtnCompare.addEventListener('click', () => openFolderPicker(libraryFolderPickerConfig));
+
+  loadFromFolderBtnTap.addEventListener('click', () => openFolderPicker({
+    getTarget: () => tapLibrary,
+    buildEntry: (rec) => ({
+      id: rec.id, name: rec.name, size: rec.size, audioBuffer: rec.audioBuffer,
+      skipStart: rec.skipStart || '', skipEnd: rec.skipEnd || '', included: true,
+      _rawBuffer: rec._rawBuffer, _folderSynced: true
+    }),
+    onAdded: () => renderTapRows()
+  }));
+
+  loadFromFolderBtnCluster.addEventListener('click', () => openFolderPicker({
+    getTarget: () => clusterLibrary,
+    buildEntry: (rec) => ({
+      id: rec.id, name: rec.name, size: rec.size, audioBuffer: rec.audioBuffer,
+      cropStart: rec.skipStart || '', cropEnd: rec.skipEnd || '', included: true,
+      _rawBuffer: rec._rawBuffer, _folderSynced: true
+    }),
+    onAdded: () => renderClusterRows()
+  }));
+
+  async function runTapAnalysis(){
+    if (tapRunning) return;
+    if (!tapLibrary.length){
+      tapStatus.textContent = 'Load at least one .wav file first.';
+      tapStatus.classList.add('err');
+      return;
+    }
+    const activeEntries = tapLibrary.filter(e => e.included !== false);
+    if (!activeEntries.length){
+      tapStatus.textContent = 'Tick at least one recording to analyse.';
+      tapStatus.classList.add('err');
+      return;
+    }
+    tapRunning = true;
+    runTapBtn.disabled = true;
+    tapStatus.classList.remove('err');
+
+    const opts = {
+      numEvents:  parseInt(el('advNumEvents').value, 10) || 10,
+      minGap:     parseFloat(el('advMinGap').value) || 0.3,
+      minFreq:    parseFloat(el('advMinFreq').value) || 50,
+      maxFreq:    parseFloat(el('advMaxFreq').value) || 1000,
+      topNBasis:  parseInt(el('advTopNBasis').value, 10) || 10,
+      tolerance:  parseFloat(el('advTolerance').value) || 2,
+      useEnergy:  el('tapMetric').value === 'energy',
+    };
+
+    const fileSummaries = [];
+    const errors = [];
+    for (let i = 0; i < activeEntries.length; i++){
+      const entry = activeEntries[i];
+      tapStatus.textContent = `Analysing ${i+1}/${activeEntries.length}: ${entry.name}…`;
+      await sleep0();
+      try{
+        fileSummaries.push(await analyseTapFile(entry, opts));
+      }catch(err){
+        console.error(err);
+        errors.push(`${entry.name} (${err.message})`);
+      }
+    }
+
+    tapRunning = false;
+    runTapBtn.disabled = false;
+
+    if (!fileSummaries.length){
+      tapStatus.textContent = errors.length ? `Failed: ${errors.join(' · ')}` : 'No files processed successfully.';
+      tapStatus.classList.add('err');
+      return;
+    }
+
+    tapStatus.textContent = errors.length
+      ? `Done, with ${errors.length} skipped: ${errors.join(' · ')}`
+      : `Done — analysed ${fileSummaries.length} file(s).`;
+    if (errors.length) tapStatus.classList.add('err');
+
+    lastTapFileSummaries = fileSummaries;
+    tapHiddenLabels = new Set(); // fresh run — show every file by default
+    renderScatter(fileSummaries);
+    renderVarianceTables(fileSummaries);
+  }
+
+  runTapBtn.addEventListener('click', runTapAnalysis);
+
+  function getTapTopN(){
+    const n = parseInt(tapTopNSelect.value, 10);
+    return Math.min(10, Math.max(1, n || 5));
+  }
+
+  tapTopNSelect.addEventListener('change', () => {
+    const n = getTapTopN();
+    tapFreqRangeLabel.textContent = `(top ${n} most common frequenc${n === 1 ? 'y' : 'ies'} per file, average % vs. Hz)`;
+    if (lastTapFileSummaries) {
+      renderScatter(lastTapFileSummaries);
+      renderVarianceTables(lastTapFileSummaries);
+    }
+  });
+
+  function renderScatter(fileSummaries){
+    const topN = getTapTopN();
+    // Colour is assigned from each file's position in the *full* (unfiltered)
+    // list, so a file's colour never shifts when other files get hidden —
+    // and stays consistent with the same file's row in the variance tables
+    // below, which index off this same full list independently.
+    const allSummaries = fileSummaries.map((fs, fi) => ({
+      ...fs,
+      freqSummary: fs.freqSummary.slice(0, topN),
+      color: TAP_COLOURS[fi % TAP_COLOURS.length],
+    }));
+    const visibleSummaries = allSummaries.filter(fs => !tapHiddenLabels.has(fs.label));
+
+    const ctx = scatterCanvas.getContext('2d');
+    const w = scatterCanvas.width, h = scatterCanvas.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle = '#fbfbf9';
+    ctx.fillRect(0,0,w,h);
+
+    const allFreqs = [], allPcts = [];
+    visibleSummaries.forEach(fs => fs.freqSummary.forEach(e => { allFreqs.push(e.freq); allPcts.push(e.avgPct); }));
+
+    if (!allFreqs.length){
+      ctx.fillStyle = '#83837c';
+      ctx.font = '15px "JetBrains Mono", monospace';
+      ctx.fillText(allSummaries.length ? 'All files are hidden — click a name below to show it.' : 'No frequency data to plot.', 20, h/2);
+      scatterPoints = [];
+      scatterTooltip.classList.remove('visible');
+      renderScatterLegend(allSummaries);
+      return;
+    }
+
+    const fMin = Math.min(...allFreqs), fMax = Math.max(...allFreqs);
+    const pMin = 0, pMax = Math.max(...allPcts);
+    const freqRange = Math.max(fMax - fMin, 1);
+    const xPad = Math.max(freqRange*0.18, 20);
+    const yPad = Math.max(pMax*0.18, 2);
+    const xLo = fMin - xPad, xHi = fMax + xPad;
+    const yLo = 0, yHi = pMax + yPad;
+
+    const marginL = 54, marginB = 26, marginT = 12, marginR = 14;
+    const plotW = w - marginL - marginR, plotH = h - marginT - marginB;
+    const toX = f => marginL + ((f-xLo)/(xHi-xLo))*plotW;
+    const toY = p => marginT + plotH - ((p-yLo)/(yHi-yLo))*plotH;
+
+    // grid + axes
+    ctx.strokeStyle = '#e2e2dc';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#6b6b64';
+    ctx.font = '13px "JetBrains Mono", monospace';
+    for (let i = 0; i <= 5; i++){
+      const p = yLo + (i/5)*(yHi-yLo);
+      const y = toY(p);
+      ctx.beginPath(); ctx.moveTo(marginL, y); ctx.lineTo(w-marginR, y); ctx.stroke();
+      ctx.fillText(p.toFixed(1)+'%', 4, y+3);
+    }
+    const nXTicks = 6;
+    for (let i = 0; i <= nXTicks; i++){
+      const f = xLo + (i/nXTicks)*(xHi-xLo);
+      const x = toX(f);
+      ctx.beginPath(); ctx.moveTo(x, marginT); ctx.lineTo(x, h-marginB); ctx.stroke();
+      const label = f.toFixed(0)+' Hz';
+      ctx.fillText(label, Math.min(w-marginR-ctx.measureText(label).width, Math.max(marginL, x-16)), h-8);
+    }
+
+    const dotR = 5.5;
+
+    // Draw a filled, coloured dot marker for every frequency point, and
+    // remember each one's canvas position + underlying data so a click on
+    // the graph can look up which point was hit.
+    scatterPoints = [];
+    visibleSummaries.forEach(fs => {
+      fs.freqSummary.forEach(entry => {
+        const cx = toX(entry.freq), cy = toY(entry.avgPct);
+        ctx.beginPath();
+        ctx.arc(cx, cy, dotR, 0, Math.PI*2);
+        ctx.fillStyle = fs.color;
+        ctx.fill();
+        ctx.strokeStyle = '#fbfbf9';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        scatterPoints.push({
+          cx, cy, color: fs.color, label: fs.label,
+          freq: entry.freq, avgPct: entry.avgPct, appearances: entry.appearances,
+          eventCount: fs.eventCount, stdPct: entry.stdPct,
+          minPct: entry.minPct, maxPct: entry.maxPct, stdHz: entry.stdHz
+        });
+      });
+    });
+    scatterTooltip.classList.remove('visible');
+
+    renderScatterLegend(allSummaries);
+  }
+
+  // Legend under the scatter graph: one clickable entry per file. Clicking a
+  // name toggles that file's points on/off the graph above (the variance
+  // tables below are unaffected — this only controls what's plotted).
+  function renderScatterLegend(allSummaries){
+    scatterLegend.innerHTML = '';
+    allSummaries.forEach(fs => {
+      const hidden = tapHiddenLabels.has(fs.label);
+      const item = document.createElement('div');
+      item.className = 'sl-item' + (hidden ? ' hidden' : '');
+      item.title = hidden ? 'Click to show this file on the graph' : 'Click to hide this file from the graph';
+      const swatch = document.createElement('span');
+      swatch.className = 'sl-swatch';
+      swatch.style.background = fs.color;
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(`${fs.label} (${fs.eventCount}/${fs.detectedEvents} events)`));
+      item.addEventListener('click', () => {
+        if (tapHiddenLabels.has(fs.label)) tapHiddenLabels.delete(fs.label);
+        else tapHiddenLabels.add(fs.label);
+        if (lastTapFileSummaries) renderScatter(lastTapFileSummaries);
+      });
+      scatterLegend.appendChild(item);
+    });
+  }
+
+  function renderVarianceTables(fileSummaries){
+    const topN = getTapTopN();
+    fileSummaries = fileSummaries.map(fs => ({ ...fs, freqSummary: fs.freqSummary.slice(0, topN) }));
+    tapResultsBody.innerHTML = fileSummaries.map((fs, fi) => {
+      const color = TAP_COLOURS[fi % TAP_COLOURS.length];
+      const rows = fs.freqSummary.map(e => `
+        <tr>
+          <td class="freq">${e.freq.toFixed(1)} Hz</td>
+          <td>${e.appearances}/${fs.eventCount}</td>
+          <td>${e.avgPct.toFixed(1)}%</td>
+          <td>±${e.stdPct.toFixed(2)}%</td>
+          <td>${e.minPct.toFixed(1)}–${e.maxPct.toFixed(1)}%</td>
+          <td>±${e.stdHz.toFixed(3)} Hz</td>
+        </tr>`).join('');
+      return `
+        <div class="variance-block">
+          <div class="vb-title"><span class="swatch" style="background:${color};"></span>${fs.label} — ${fs.eventCount} of ${fs.detectedEvents} events analysed</div>
+          <table class="variance">
+            <thead><tr><th>Freq</th><th>Appears</th><th>Avg %</th><th>Std % (energy variance)</th><th>Range %</th><th>Drift (freq variance)</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="6" style="color:var(--text-faint);">No consistent peaks found.</td></tr>'}</tbody>
+          </table>
+        </div>`;
+    }).join('');
+  }
+
+  // ---------------- Clustering: run pipeline ----------------
+  // Mirrors build_dataset_unlabeled() + kmeans_cluster() + rf_proximity_clustering()
+  // from random_forest.py: detect taps per file -> FFT-feature each tap
+  // (fmax adjustable, default 1500 Hz; n_bins=64) -> KMeans/silhouette picks k
+  // -> RF proximity clustering (primary) at that k -> adjusted Rand index vs. KMeans.
+  const CLUSTER_N_BINS = 64, CLUSTER_FMIN = 20;
+  // Defaults match extract_window()'s pre_ms=5 and fft_features()/get_bin_edges()'s
+  // implicit fmax=1500 usage from when this pipeline was first built — both are
+  // now user-adjustable in Advanced settings, with a button to reset back to these.
+  const CLUSTER_OFFSET_DEFAULT = 0.005, CLUSTER_FMAX_DEFAULT = 1500;
+
+  // Reads the Offset (s) / Fmax (Hz) advanced fields, falling back to the
+  // defaults above for blank/invalid input.
+  function getClusterOffsetFmax(){
+    const offsetSec = parseFloat(el('clusterOffset').value);
+    const fmax = parseFloat(el('clusterFmax').value);
+    return {
+      // Negative offsets are valid: they start the FFT window that far
+      // *after* the tap's onset instead of before it, cutting off the very
+      // start of the tap (e.g. to skip a click/thump and analyse only the
+      // settled resonance).
+      offsetSec: isFinite(offsetSec) ? offsetSec : CLUSTER_OFFSET_DEFAULT,
+      fmax: isFinite(fmax) && fmax > 0 ? fmax : CLUSTER_FMAX_DEFAULT,
+    };
+  }
+
+  el('clusterResetOffsetFmax').addEventListener('click', () => {
+    el('clusterOffset').value = CLUSTER_OFFSET_DEFAULT;
+    el('clusterFmax').value = CLUSTER_FMAX_DEFAULT;
+  });
+
+  async function runClustering(){
+    const engine = el('clusterEngine').value;
+    if (engine === 'python') return runClusteringPython();
+    return runClusteringJS();
+  }
+
+  async function runClusteringJS(){
+    if (clusterRunning) return;
+    if (!clusterLibrary.length){
+      clusterStatus.textContent = 'Load at least one .wav file first.';
+      clusterStatus.classList.add('err');
+      return;
+    }
+    const activeEntries = clusterLibrary.filter(e => e.included !== false);
+    if (!activeEntries.length){
+      clusterStatus.textContent = 'Tick at least one recording to analyse.';
+      clusterStatus.classList.add('err');
+      return;
+    }
+    clusterRunning = true;
+    runClusterBtn.disabled = true;
+    clusterStatus.classList.remove('err');
+
+    const windowMs = parseInt(el('clusterWindowMs').value, 10) || 120;
+    const nEstimators = Math.max(10, parseInt(el('clusterNTrees').value, 10) || 500);
+    const minGapMs = (parseFloat(el('clusterMinGap').value) || 0.15) * 1000;
+    const forceKRaw = el('clusterForceK').value.trim();
+    const forceK = forceKRaw !== '' ? Math.max(2, parseInt(forceKRaw, 10)) : null;
+    const { offsetSec, fmax } = getClusterOffsetFmax();
+    const offsetMs = offsetSec * 1000;
+
+    const X = [], meta = [];
+    const warnings = [];
+    let srUsed = null;
+    const sampleRates = new Set();
+
+    for (let fi = 0; fi < activeEntries.length; fi++){
+      const entry = activeEntries[fi];
+      clusterStatus.textContent = `Detecting taps ${fi+1}/${activeEntries.length}: ${entry.name}…`;
+      await sleep0();
+
+      const audioBuffer = entry.audioBuffer;
+      const sr = audioBuffer.sampleRate;
+      sampleRates.add(sr);
+      const nCh = audioBuffer.numberOfChannels;
+      let samples;
+      if (nCh === 1){
+        samples = audioBuffer.getChannelData(0).slice();
+      } else {
+        const n = audioBuffer.length;
+        samples = new Float32Array(n);
+        for (let c = 0; c < nCh; c++){
+          const ch = audioBuffer.getChannelData(c);
+          for (let i = 0; i < n; i++) samples[i] += ch[i]/nCh;
+        }
+      }
+
+      const cropStartVal = (entry.cropStart||'').trim();
+      const cropEndVal = (entry.cropEnd||'').trim();
+      const cropStartSec = cropStartVal !== '' ? Math.max(0, parseFloat(cropStartVal)) : 0;
+      const cropEndSec = cropEndVal !== '' ? Math.max(0, parseFloat(cropEndVal)) : 0;
+      samples = trimSignalRF(samples, sr, isFinite(cropStartSec) ? cropStartSec : 0, isFinite(cropEndSec) ? cropEndSec : 0);
+      await sleep0();
+
+      const onsets = detectTapsRF(samples, sr, { minGapMs });
+      if (!onsets.length){
+        warnings.push(`${entry.name}: no taps detected, skipped`);
+        continue;
+      }
+      await sleep0();
+
+      const noiseSpectrum = estimateNoiseSpectrumRF(samples, sr, onsets, windowMs);
+      if (!noiseSpectrum) warnings.push(`${entry.name}: no quiet gap found, denoising skipped for this file`);
+      await sleep0();
+
+      for (let i = 0; i < onsets.length; i++){
+        const segment = extractWindowRF(samples, sr, onsets[i], windowMs, offsetMs);
+        const feat = fftFeaturesRF(segment, sr, { nBins: CLUSTER_N_BINS, fmin: CLUSTER_FMIN, fmax, noiseSpectrum });
+        X.push(Array.from(feat));
+        meta.push({ file: entry.name, tapIndex: i });
+        if (i % 5 === 4) await sleep0();
+      }
+      if (srUsed === null) srUsed = sr;
+    }
+
+    if (sampleRates.size > 1){
+      warnings.push(`files have different sample rates (${[...sampleRates].join(', ')}) — bin Hz ranges shown assume ${srUsed} Hz`);
+    }
+
+    if (X.length < 6){
+      clusterRunning = false;
+      runClusterBtn.disabled = false;
+      clusterStatus.textContent = `Need at least 6 detected taps total to cluster meaningfully (got ${X.length}).`;
+      clusterStatus.classList.add('err');
+      return;
+    }
+
+    clusterStatus.textContent = `Determining k (KMeans + silhouette) across ${X.length} taps…`;
+    await sleep0();
+    const kmRes = kmeansClusterAutoK(X, forceK != null ? { k: forceK } : { kRange: [2,3,4,5,6,7,8] });
+    const k = kmRes.k;
+    if (k == null){
+      clusterRunning = false;
+      runClusterBtn.disabled = false;
+      clusterStatus.textContent = 'Could not determine a cluster count — try more taps or force a k.';
+      clusterStatus.classList.add('err');
+      return;
+    }
+
+    clusterStatus.textContent = `Running Random Forest proximity clustering (k=${k}, ${nEstimators} trees)…`;
+    await sleep0();
+    const rfRes = rfProximityClustering(X, k, { nEstimators, randomState: 42 });
+    await sleep0();
+
+    const agreement = adjustedRandScore(kmRes.labels, rfRes.labels);
+
+    clusterRunning = false;
+    runClusterBtn.disabled = false;
+    clusterStatus.textContent = warnings.length
+      ? `Done — ${X.length} taps, k=${k}, agreement=${agreement.toFixed(3)}. Notes: ${warnings.join(' · ')}`
+      : `Done — ${X.length} taps across ${activeEntries.length} file(s), k=${k}, agreement (adjusted Rand vs. KMeans)=${agreement.toFixed(3)}.`;
+
+    const edges = getBinEdgesRF(srUsed, CLUSTER_N_BINS, CLUSTER_FMIN, fmax);
+    renderClusterResults({ meta, rfLabels: rfRes.labels, importances: rfRes.importances, edges, k, agreement, fmax });
+  }
+
+  // ---------------- Clustering: "real Python" engine via Pyodide ----------------
+  // Runs the *actual* functions from random_forest.py (copied verbatim below)
+  // inside the browser using a real CPython + numpy/scipy/scikit-learn build
+  // (Pyodide, compiled to WebAssembly) instead of the JS reimplementation
+  // above. This is the only way to get results that match your local Python
+  // run, since JS and Python use different underlying random-number
+  // generators for the Random Forest step — no amount of careful JS porting
+  // can reproduce numpy's exact random sequence.
+  const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/v314.0.4/full/pyodide.js';
+  let pyodideInstance = null;
+  let pyodidePackagesReady = false;
+  let pyodideLoadPromise = null;
+
+  function loadPyodideScriptTag(){
+    return new Promise((resolve, reject) => {
+      if (window.loadPyodide){ resolve(); return; }
+      const existing = document.querySelector(`script[src="${PYODIDE_CDN}"]`);
+      if (existing){
+        existing.addEventListener('load', () => resolve());
+        existing.addEventListener('error', () => reject(new Error('Could not load the Pyodide script from ' + PYODIDE_CDN)));
+        return;
+      }
+      const s = document.createElement('script');
+      s.src = PYODIDE_CDN;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Could not load the Pyodide script from ' + PYODIDE_CDN + ' — check your internet connection.'));
+      document.head.appendChild(s);
+    });
+  }
+
+  // Verbatim (I/O and CLI-plumbing stripped) port of the algorithmic core of
+  // random_forest.py, plus a thin JSON-in/JSON-out bridge function at the
+  // bottom. Every function between the markers below is copied unmodified
+  // from the uploaded script — only load_wav_mono's file-reading and
+  // build_dataset_unlabeled's folder-globbing were replaced, since audio
+  // decoding happens in the browser (Web Audio API) rather than via
+  // scipy.io.wavfile.read.
+  const PYTHON_CLUSTERING_SOURCE = `
+import json
+import numpy as np
+from scipy.signal import find_peaks
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score, adjusted_rand_score
+
+# ============ verbatim from random_forest.py ============
+
+def trim_signal(signal, sr, skip_start_sec=0.0, skip_end_sec=0.0):
+    start_idx = int(sr * skip_start_sec)
+    end_idx = len(signal) - int(sr * skip_end_sec)
+    end_idx = max(start_idx, end_idx)
+    return signal[start_idx:end_idx]
+
+
+def detect_taps(signal, sr, min_gap_ms=150, energy_win_ms=10, rel_threshold=0.15, expected_taps=None):
+    win = max(1, int(sr * energy_win_ms / 1000))
+    energy = np.convolve(signal ** 2, np.ones(win) / win, mode="same")
+    min_distance = int(sr * min_gap_ms / 1000)
+    height = rel_threshold * energy.max()
+    peaks, _ = find_peaks(energy, height=height, distance=min_distance)
+
+    if expected_taps is not None and len(peaks) > expected_taps:
+        peak_energies = energy[peaks]
+        top = np.argsort(peak_energies)[::-1][:expected_taps]
+        peaks = np.sort(peaks[top])
+
+    return peaks
+
+
+def extract_window(signal, sr, onset_idx, window_ms=500, pre_ms=5):
+    pre = int(sr * pre_ms / 1000)
+    length = int(sr * window_ms / 1000)
+    start = max(0, onset_idx - pre)
+    end = start + length
+    segment = signal[start:end]
+    if len(segment) < length:
+        segment = np.pad(segment, (0, length - len(segment)))
+    return segment
+
+
+def estimate_noise_spectrum(signal, sr, onsets, window_ms=120, tail_margin_ms=300):
+    length = int(sr * window_ms / 1000)
+    margin = int(sr * tail_margin_ms / 1000)
+    segments = []
+
+    if len(onsets) > 0 and onsets[0] - length > 0:
+        segments.append(signal[0:length])
+
+    for a, b in zip(onsets[:-1], onsets[1:]):
+        start = a + margin
+        end = start + length
+        if end < b:
+            segments.append(signal[start:end])
+
+    if not segments:
+        return None
+
+    window = np.hanning(length)
+    spectra = [np.abs(np.fft.rfft(s * window)) for s in segments]
+    return np.mean(spectra, axis=0)
+
+
+def fft_features(segment, sr, n_bins=64, fmin=20, fmax=None, noise_spectrum=None):
+    if fmax is None:
+        fmax = sr / 2
+    window = np.hanning(len(segment))
+    spectrum = np.abs(np.fft.rfft(segment * window))
+
+    if noise_spectrum is not None:
+        spectrum = np.maximum(spectrum - noise_spectrum, 0)
+
+    freqs = np.fft.rfftfreq(len(segment), d=1 / sr)
+    bin_edges = np.logspace(np.log10(fmin), np.log10(fmax), n_bins + 1)
+    features = np.zeros(n_bins)
+    for i in range(n_bins):
+        mask = (freqs >= bin_edges[i]) & (freqs < bin_edges[i + 1])
+        if mask.any():
+            features[i] = spectrum[mask].mean()
+    return np.log1p(features)
+
+
+def get_bin_edges(sr, n_bins=64, fmin=20, fmax=None):
+    if fmax is None:
+        fmax = sr / 2
+    return np.logspace(np.log10(fmin), np.log10(fmax), n_bins + 1)
+
+
+def kmeans_cluster(X, k=None, k_range=range(2, 9), random_state=42):
+    Xs = StandardScaler().fit_transform(X)
+    n_samples = X.shape[0]
+
+    if k is not None:
+        labels = KMeans(n_clusters=k, n_init=10, random_state=random_state).fit_predict(Xs)
+        return labels, k, Xs
+
+    best_k, best_score, best_labels = None, -1, None
+    for k_try in k_range:
+        if k_try >= n_samples:
+            break
+        labels_try = KMeans(n_clusters=k_try, n_init=10, random_state=random_state).fit_predict(Xs)
+        score = silhouette_score(Xs, labels_try)
+        if score > best_score:
+            best_k, best_score, best_labels = k_try, score, labels_try
+
+    return best_labels, best_k, Xs
+
+
+def rf_proximity_clustering(X, k, n_estimators=500, random_state=42):
+    rng = np.random.default_rng(random_state)
+    X_synth = np.column_stack([rng.permutation(X[:, j]) for j in range(X.shape[1])])
+    X_combined = np.vstack([X, X_synth])
+    y_combined = np.array([1] * len(X) + [0] * len(X_synth))
+
+    clf = RandomForestClassifier(
+        n_estimators=n_estimators,
+        min_samples_leaf=3,
+        max_features="sqrt",
+        random_state=random_state,
+        n_jobs=-1,
+    )
+    clf.fit(X_combined, y_combined)
+
+    leaves = clf.apply(X)
+    n = X.shape[0]
+    prox = np.zeros((n, n), dtype=np.float32)
+    for t in range(leaves.shape[1]):
+        col = leaves[:, t]
+        prox += (col[:, None] == col[None, :])
+    prox /= leaves.shape[1]
+
+    distance = 1 - prox
+    np.fill_diagonal(distance, 0)
+    Z = linkage(squareform(distance, checks=False), method="average")
+    labels = fcluster(Z, t=k, criterion="maxclust")
+
+    return labels, clf.feature_importances_
+
+# ============ end verbatim ============
+
+# Thin bridge: takes JSON describing each loaded/decoded file (already mono,
+# already peak-normalized the same way load_wav_mono() does) plus the run
+# parameters, runs the exact pipeline above, and returns JSON the JS side
+# renders with the same renderClusterResults() used by the JS engine.
+def run_clustering_bridge(payload_json):
+    # Everything comes in through one JSON string (rather than separate
+    # positional arguments) so there's no ambiguity between JS's null/
+    # undefined and Python's None when crossing the pyodide FFI boundary --
+    # json.loads() maps JSON null to Python None unambiguously.
+    payload = json.loads(payload_json)
+    files_data = payload['files']
+    window_ms = payload['windowMs']
+    n_estimators = payload['nEstimators']
+    force_k = payload.get('forceK')
+    min_gap_ms = payload['minGapMs']
+    random_state = payload['randomState']
+    offset_ms = payload.get('offsetMs')
+    if offset_ms is None:
+        offset_ms = 5
+    fmax = payload.get('fmax')
+    if fmax is None:
+        fmax = 1500
+
+    X, meta = [], []
+    sample_rates = set()
+    sr_used = None
+    warnings = []
+
+    for f in files_data:
+        name = f['name']
+        sr = f['sr']
+        sample_rates.add(sr)
+        signal = np.array(f['samples'], dtype=np.float32)
+        peak = np.max(np.abs(signal)) or 1.0
+        signal = signal / peak
+        signal = trim_signal(signal, sr, f.get('cropStart') or 0.0, f.get('cropEnd') or 0.0)
+
+        onsets = detect_taps(signal, sr, min_gap_ms=min_gap_ms)
+        if len(onsets) == 0:
+            warnings.append(f"{name}: no taps detected, skipped")
+            continue
+
+        noise_spectrum = estimate_noise_spectrum(signal, sr, onsets, window_ms=window_ms)
+        if noise_spectrum is None:
+            warnings.append(f"{name}: no quiet gap found, denoising skipped for this file")
+
+        for i, onset in enumerate(onsets):
+            segment = extract_window(signal, sr, onset, window_ms=window_ms, pre_ms=offset_ms)
+            feat = fft_features(segment, sr, n_bins=64, fmin=20, fmax=fmax, noise_spectrum=noise_spectrum)
+            X.append(feat)
+            meta.append({'file': name, 'tapIndex': i})
+        if sr_used is None:
+            sr_used = sr
+
+    if len(sample_rates) > 1:
+        warnings.append(f"files have different sample rates ({sorted(sample_rates)}) -- bin Hz ranges shown assume {sr_used} Hz")
+
+    if len(X) < 6:
+        return json.dumps({'error': f'Need at least 6 detected taps total to cluster meaningfully (got {len(X)}).'})
+
+    X = np.array(X)
+    km_labels, k, Xs = kmeans_cluster(X, k=force_k)
+    if k is None:
+        return json.dumps({'error': 'Could not determine a cluster count -- try more taps or force a k.'})
+
+    rf_labels, importances = rf_proximity_clustering(X, k=k, n_estimators=n_estimators, random_state=random_state)
+    agreement = adjusted_rand_score(km_labels, rf_labels)
+    edges = get_bin_edges(sr_used, n_bins=64, fmin=20, fmax=fmax)
+
+    return json.dumps({
+        'meta': meta,
+        'rfLabels': [int(x) for x in rf_labels],
+        'importances': [float(x) for x in importances],
+        'edges': [float(x) for x in edges],
+        'k': int(k),
+        'agreement': float(agreement),
+        'nTaps': len(X),
+        'nFiles': len(files_data),
+        'warnings': warnings,
+    })
+`;
+
+  async function ensurePyodideReady(onStatus){
+    if (pyodideInstance && pyodidePackagesReady) return pyodideInstance;
+    if (pyodideLoadPromise) return pyodideLoadPromise;
+
+    pyodideLoadPromise = (async () => {
+      onStatus('Loading Python runtime (Pyodide)…');
+      await loadPyodideScriptTag();
+      pyodideInstance = await window.loadPyodide();
+
+      onStatus('Loading numpy / scipy / scikit-learn (first run only, ~40MB, needs internet)…');
+      await pyodideInstance.loadPackage(['numpy', 'scipy', 'scikit-learn']);
+
+      onStatus('Preparing the clustering pipeline…');
+      await pyodideInstance.runPythonAsync(PYTHON_CLUSTERING_SOURCE);
+
+      pyodidePackagesReady = true;
+      return pyodideInstance;
+    })();
+
+    try{
+      return await pyodideLoadPromise;
+    }catch(err){
+      pyodideLoadPromise = null; // allow retrying on the next Run click
+      throw err;
+    }
+  }
+
+  async function runClusteringPython(){
+    if (clusterRunning) return;
+    if (!clusterLibrary.length){
+      clusterStatus.textContent = 'Load at least one .wav file first.';
+      clusterStatus.classList.add('err');
+      return;
+    }
+    const activeEntries = clusterLibrary.filter(e => e.included !== false);
+    if (!activeEntries.length){
+      clusterStatus.textContent = 'Tick at least one recording to analyse.';
+      clusterStatus.classList.add('err');
+      return;
+    }
+    clusterRunning = true;
+    runClusterBtn.disabled = true;
+    clusterStatus.classList.remove('err');
+
+    const windowMs = parseInt(el('clusterWindowMs').value, 10) || 120;
+    const nEstimators = Math.max(10, parseInt(el('clusterNTrees').value, 10) || 500);
+    const minGapMs = (parseFloat(el('clusterMinGap').value) || 0.15) * 1000;
+    const forceKRaw = el('clusterForceK').value.trim();
+    const forceK = forceKRaw !== '' ? Math.max(2, parseInt(forceKRaw, 10)) : null;
+    const { offsetSec, fmax } = getClusterOffsetFmax();
+    const offsetMs = offsetSec * 1000;
+
+    try{
+      const pyodide = await ensurePyodideReady((msg) => { clusterStatus.textContent = msg; });
+
+      clusterStatus.textContent = `Decoding ${activeEntries.length} file(s)…`;
+      await sleep0();
+
+      const filesData = [];
+      for (const entry of activeEntries){
+        const audioBuffer = entry.audioBuffer;
+        const sr = audioBuffer.sampleRate;
+        const nCh = audioBuffer.numberOfChannels;
+        let samples;
+        if (nCh === 1){
+          samples = audioBuffer.getChannelData(0);
+        } else {
+          const n = audioBuffer.length;
+          const mixed = new Float32Array(n);
+          for (let c = 0; c < nCh; c++){
+            const ch = audioBuffer.getChannelData(c);
+            for (let i = 0; i < n; i++) mixed[i] += ch[i]/nCh;
+          }
+          samples = mixed;
+        }
+        const cropStartVal = (entry.cropStart||'').trim();
+        const cropEndVal = (entry.cropEnd||'').trim();
+        filesData.push({
+          name: entry.name,
+          sr,
+          samples: Array.from(samples),
+          cropStart: cropStartVal !== '' ? parseFloat(cropStartVal) : 0,
+          cropEnd: cropEndVal !== '' ? parseFloat(cropEndVal) : 0,
+        });
+        await sleep0();
+      }
+
+      clusterStatus.textContent = `Running the real Python pipeline (k=${forceK != null ? forceK : 'auto'}, ${nEstimators} trees)… this can take a while.`;
+      await sleep0();
+
+      const bridge = pyodide.globals.get('run_clustering_bridge');
+      const payload = {
+        files: filesData, windowMs, nEstimators, forceK, minGapMs, randomState: 42,
+        offsetMs, fmax,
+      };
+      const resultJson = bridge(JSON.stringify(payload));
+      bridge.destroy();
+      const result = JSON.parse(resultJson);
+
+      clusterRunning = false;
+      runClusterBtn.disabled = false;
+
+      if (result.error){
+        clusterStatus.textContent = result.error;
+        clusterStatus.classList.add('err');
+        return;
+      }
+
+      const warnings = result.warnings || [];
+      clusterStatus.textContent = warnings.length
+        ? `Done (Python) — ${result.nTaps} taps, k=${result.k}, agreement=${result.agreement.toFixed(3)}. Notes: ${warnings.join(' · ')}`
+        : `Done (Python) — ${result.nTaps} taps across ${result.nFiles} file(s), k=${result.k}, agreement (adjusted Rand vs. KMeans)=${result.agreement.toFixed(3)}.`;
+
+      renderClusterResults({
+        meta: result.meta, rfLabels: result.rfLabels, importances: result.importances,
+        edges: result.edges, k: result.k, agreement: result.agreement, fmax,
+      });
+    }catch(err){
+      console.error('Pyodide clustering failed', err);
+      clusterRunning = false;
+      runClusterBtn.disabled = false;
+      clusterStatus.textContent = `Python engine failed: ${err.message || err}. Check your internet connection, or switch back to the JavaScript engine above.`;
+      clusterStatus.classList.add('err');
+    }
+  }
+
+  runClusterBtn.addEventListener('click', runClustering);
+
+  function renderClusterResults(res){
+    const { meta, rfLabels, importances, edges, k, agreement, fmax } = res;
+    const fmaxLabel = fmax != null ? `${fmax} Hz` : 'your chosen Fmax';
+    el('clusterFreqRangeLabel').textContent = `(RF-proximity clustering, FFT features up to ${fmaxLabel})`;
+
+    // --- Table 1: RF-proximity cluster sizes ---
+    const sizeCounts = {};
+    rfLabels.forEach(c => { sizeCounts[c] = (sizeCounts[c]||0) + 1; });
+    const sizeClusters = Object.keys(sizeCounts).map(Number).sort((a,b) => a-b);
+    const sizeRows = sizeClusters.map(c => `
+      <tr><td>Cluster ${c}</td><td>${sizeCounts[c]} taps</td></tr>`).join('');
+
+    // --- Table 2: Per-file cluster breakdown (RF-proximity), as a file x
+    // cluster matrix — one column per cluster, blank cells where the count
+    // is 0, plus a Total column so the per-file tap count is still visible.
+    const files = [...new Set(meta.map(m => m.file))].sort((a,b) => a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}));
+    const matrixClusters = sizeClusters; // reuse the same sorted cluster-id list as Table 1
+    const matrixHeaderCells = matrixClusters.map(c => `<th style="text-align:center;">${c}</th>`).join('') + `<th style="text-align:center;">Total</th>`;
+    const fileRows = files.map(fname => {
+      const idxs = meta.map((m,i) => m.file === fname ? i : -1).filter(i => i >= 0);
+      const counts = {};
+      idxs.forEach(i => { const c = rfLabels[i]; counts[c] = (counts[c]||0) + 1; });
+      const cells = matrixClusters.map(c => `<td style="text-align:center;">${counts[c] || ''}</td>`).join('');
+      return `<tr><td>${fname}</td>${cells}<td style="text-align:center;font-weight:600;">${idxs.length}</td></tr>`;
+    }).join('');
+
+    // --- Table 3: Top 10 frequency bins the Random Forest found most informative ---
+    const topBins = importances.map((v,i) => ({i, v}))
+      .sort((a,b) => b.v - a.v)
+      .slice(0, 10);
+    const binRows = topBins.map(({i,v}) => `
+      <tr><td class="freq">Bin ${i}</td><td>${edges[i].toFixed(1)}–${edges[i+1].toFixed(1)} Hz</td><td>${v.toFixed(4)}</td></tr>`).join('');
+
+    let agreementNote;
+    if (agreement > 0.5) agreementNote = 'Two independent methods largely agree — reasonable confidence the groups are real.';
+    else if (agreement > 0.2) agreementNote = 'Partial agreement — treat the grouping as a rough starting point, not a firm answer.';
+    else agreementNote = 'Low agreement — these clusters are not stable; try more taps, a different window, or listen to samples from each cluster before trusting the grouping.';
+
+    clusterResultsBody.innerHTML = `
+      <div class="variance-block">
+        <div class="vb-title">Chosen k = ${k} · Agreement vs. KMeans (adjusted Rand index) = ${agreement.toFixed(3)}</div>
+        <div class="empty-note" style="margin-bottom:14px;">${agreementNote}</div>
+      </div>
+      <div class="variance-block">
+        <div class="vb-title">RF-proximity cluster sizes</div>
+        <table class="variance">
+          <thead><tr><th>Cluster</th><th>Size</th></tr></thead>
+          <tbody>${sizeRows || '<tr><td colspan="2" style="color:var(--text-faint);">No clusters.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="variance-block">
+        <div class="vb-title">Per-file cluster breakdown (RF-proximity)</div>
+        <table class="variance">
+          <thead><tr><th>File</th>${matrixHeaderCells}</tr></thead>
+          <tbody>${fileRows || `<tr><td colspan="${matrixClusters.length+2}" style="color:var(--text-faint);">No files.</td></tr>`}</tbody>
+        </table>
+      </div>
+      <div class="variance-block">
+        <div class="vb-title">Top 10 frequency bins the Random Forest found most informative (fmax ${fmaxLabel})</div>
+        <table class="variance">
+          <thead><tr><th>Bin</th><th>Range</th><th>Importance</th></tr></thead>
+          <tbody>${binRows || '<tr><td colspan="3" style="color:var(--text-faint);">No importances.</td></tr>'}</tbody>
+        </table>
+      </div>`;
+  }
+
+  document.querySelectorAll('.home-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const btn = document.querySelector(`.tab-btn[data-page="${card.dataset.goto}"]`);
+      if (btn) btn.click();
+    });
+  });
+
+  // ---------------- Axis controls (scale + range) ----------------
+  function smoothingLabelText(){
+    if (OCTAVE_FRACTION <= 0) return 'unsmoothed';
+    const n = Math.round(1/OCTAVE_FRACTION);
+    return `1/${n}-oct smoothed`;
+  }
+
+  function updateFreqRangeLabels(){
+    const smoothTxt = smoothingLabelText();
+    document.querySelectorAll('.freq-range-label').forEach(el => {
+      const suffix = el.dataset.suffix || '';
+      const scaleTxt = freqScaleMode === 'log' ? ', log' : '';
+      const minTxt = FREQ_MIN >= 1000 ? (FREQ_MIN/1000).toFixed(1).replace(/\.0$/,'') + 'k' : Math.round(FREQ_MIN);
+      const maxTxt = FREQ_MAX >= 1000 ? (FREQ_MAX/1000).toFixed(1).replace(/\.0$/,'') + 'k' : Math.round(FREQ_MAX);
+      const parts = [`${minTxt}–${maxTxt} Hz${scaleTxt}`];
+      if (suffix) parts.push(suffix);
+      parts.push(smoothTxt);
+      el.textContent = `(${parts.join(', ')})`;
+    });
+  }
+
+  function redrawAllGraphs(){
+    if (lastCapture){
+      drawFrozenSpectrum(lastCapture);
+    } else {
+      const ctx = fftCanvas.getContext('2d');
+      ctx.clearRect(0,0,fftCanvas.width, fftCanvas.height);
+      drawGrid(ctx, fftCanvas.width, fftCanvas.height);
+    }
+    if (lastPreviewCapture) drawPreviewSpectrum(lastPreviewCapture);
+    else resetPreview();
+    drawCompareGraph();
+  }
+
+  function setScaleMode(mode){
+    freqScaleMode = mode;
+    document.querySelectorAll('.scale-btn').forEach(b => b.classList.toggle('active', b.dataset.scale === mode));
+    updateFreqRangeLabels();
+    redrawAllGraphs();
+  }
+
+  function setFreqRange(min, max){
+    if (!(min > 0) || !(max > min)) return;
+    FREQ_MIN = min;
+    FREQ_MAX = max;
+    document.querySelectorAll('.freq-min-input').forEach(i => i.value = min);
+    document.querySelectorAll('.freq-max-input').forEach(i => i.value = max);
+    updateFreqRangeLabels();
+    redrawAllGraphs();
+  }
+
+  function setSmoothing(val){
+    OCTAVE_FRACTION = (val === 'off') ? 0 : 1/parseInt(val, 10);
+    document.querySelectorAll('.smoothing-select').forEach(s => s.value = val);
+    updateFreqRangeLabels();
+    redrawAllGraphs();
+  }
+
+  document.querySelectorAll('.axis-bar').forEach(bar => {
+    const minInput = bar.querySelector('.freq-min-input');
+    const maxInput = bar.querySelector('.freq-max-input');
+    function applyRange(){
+      let min = parseFloat(minInput.value);
+      let max = parseFloat(maxInput.value);
+      if (!isFinite(min) || min < 1) min = 1;
+      if (!isFinite(max) || max <= min) max = min + 1;
+      setFreqRange(min, max);
+    }
+    if (minInput && maxInput){
+      minInput.addEventListener('change', applyRange);
+      maxInput.addEventListener('change', applyRange);
+      minInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyRange(); });
+      maxInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyRange(); });
+    }
+    bar.querySelectorAll('.scale-btn').forEach(btn => {
+      btn.addEventListener('click', () => setScaleMode(btn.dataset.scale));
+    });
+    const smoothingSelect = bar.querySelector('.smoothing-select');
+    if (smoothingSelect){
+      smoothingSelect.addEventListener('change', () => setSmoothing(smoothingSelect.value));
+    }
+  });
+
+  // ---------------- Tab navigation ----------------
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      el('page-' + btn.dataset.page).classList.add('active');
+      if (btn.dataset.page === 'compare'){
+        drawCompareGraph();
+      }
+    });
+  });
+
+  // ---------------- Selection & playback wiring ----------------
+  function selectFile(id){
+    stopPlaybackInternal();
+    activeId = id;
+    cursorFreq = null;
+    const entry = library.find(f => f.id === id);
+    renderFileList();
+    if (!entry) return;
+
+    nowPlayingLabel.textContent = entry.name;
+    if (audioEl){
+      audioEl.pause();
+      audioEl.src = '';
+    }
+    audioEl = new Audio(entry.url);
+    audioEl.preload = 'auto';
+
+    audioEl.addEventListener('loadedmetadata', () => {
+      durTimeEl.textContent = fmtTime(entry.audioBuffer.duration);
+      scrub.disabled = false;
+      playBtn.disabled = false;
+      stopBtn.disabled = false;
+      sampleBtn.disabled = false;
+      drawWaveformOverview(waveCanvas, entry.audioBuffer);
+    });
+    audioEl.addEventListener('timeupdate', () => {
+      if (!isPlaying) return;
+      curTimeEl.textContent = fmtTime(audioEl.currentTime);
+      const dur = entry.audioBuffer.duration || 1;
+      scrub.value = Math.round((audioEl.currentTime/dur)*1000);
+      drawWaveformOverview(waveCanvas, entry.audioBuffer, audioEl.currentTime/dur);
+    });
+    audioEl.addEventListener('ended', () => {
+      captureSpectrum(entry, audioEl.duration);
+      resetTransportUI();
+    });
+
+    resetSheet();
+    resetScreen('idle');
+    curTimeEl.textContent = '0:00.000';
+    durTimeEl.textContent = '0:00.000';
+    scrub.value = 0;
+  }
+
+  function ensureAudioGraph(entry){
+    if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (sourceNode) { try{ sourceNode.disconnect(); }catch(e){} sourceNode = null; }
+    sourceNode = audioCtx.createMediaElementSource(audioEl);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 32768;
+    analyser.smoothingTimeConstant = 0.55;
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  }
+
+  playBtn.addEventListener('click', () => {
+    const entry = library.find(f => f.id === activeId);
+    if (!entry) return;
+    if (isPlaying){
+      audioEl.pause();
+      isPlaying = false;
+      playBtn.innerHTML = '&#9658;';
+      cancelAnimationFrame(rafId);
+      captureSpectrum(entry, audioEl.currentTime);
+    } else {
+      if (!sourceNode) ensureAudioGraph(entry);
+      audioEl.play();
+      isPlaying = true;
+      playBtn.innerHTML = '&#10073;&#10073;';
+      resetScreen('live');
+      hideSheetPlaceholderDuringPlay();
+      liveDraw();
+    }
+  });
+
+  stopBtn.addEventListener('click', () => {
+    const entry = library.find(f => f.id === activeId);
+    if (!entry || !audioEl) return;
+    const stopTime = audioEl.currentTime;
+    audioEl.pause();
+    cancelAnimationFrame(rafId);
+    captureSpectrum(entry, stopTime);
+    audioEl.currentTime = 0;
+    resetTransportUI();
+  });
+
+  sampleBtn.addEventListener('click', () => {
+    const entry = library.find(f => f.id === activeId);
+    if (!entry || !audioEl) return;
+    if (isPlaying){
+      audioEl.pause();
+      isPlaying = false;
+      playBtn.innerHTML = '&#9658;';
+      cancelAnimationFrame(rafId);
+    }
+    const dur = entry.audioBuffer.duration || 1;
+    const offsetT = Math.max(0, parseFloat(sampleOffsetInput.value) || 0);
+    const peakTime = findLoudestPeakForward(entry.audioBuffer, audioEl.currentTime, 0.5);
+    const sampleTime = Math.min(dur, peakTime + offsetT);
+    audioEl.currentTime = sampleTime;
+    curTimeEl.textContent = fmtTime(sampleTime);
+    scrub.value = Math.round((sampleTime/dur)*1000);
+    drawWaveformOverview(waveCanvas, entry.audioBuffer, sampleTime/dur);
+    captureSpectrum(entry, sampleTime);
+  });
+
+  function scheduleCaptureAt(entry, t){
+    pendingCaptureEntry = entry;
+    pendingCaptureTime = t;
+    if (captureScheduled) return;
+    captureScheduled = true;
+    requestAnimationFrame(() => {
+      captureScheduled = false;
+      if (pendingCaptureEntry) captureSpectrum(pendingCaptureEntry, pendingCaptureTime);
+    });
+  }
+
+  scrub.addEventListener('input', () => {
+    const entry = library.find(f => f.id === activeId);
+    if (!entry || !audioEl) return;
+    const dur = entry.audioBuffer.duration || 1;
+    const t = (scrub.value/1000)*dur;
+    audioEl.currentTime = t;
+    curTimeEl.textContent = fmtTime(t);
+    drawWaveformOverview(waveCanvas, entry.audioBuffer, t/dur);
+    if (!isPlaying) scheduleCaptureAt(entry, t);
+  });
+
+  function seekFromWaveEvent(clientX){
+    const entry = library.find(f => f.id === activeId);
+    if (!entry || !audioEl) return;
+    const rect = waveCanvas.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const dur = entry.audioBuffer.duration || 1;
+    const t = frac*dur;
+    audioEl.currentTime = t;
+    curTimeEl.textContent = fmtTime(t);
+    scrub.value = Math.round(frac*1000);
+    drawWaveformOverview(waveCanvas, entry.audioBuffer, frac);
+    if (!isPlaying) scheduleCaptureAt(entry, t);
+  }
+
+  waveCanvas.addEventListener('pointerdown', (evt) => {
+    if (!audioEl) return;
+    waveDragging = true;
+    seekFromWaveEvent(evt.clientX);
+  });
+  window.addEventListener('pointermove', (evt) => {
+    if (!waveDragging) return;
+    seekFromWaveEvent(evt.clientX);
+  });
+  window.addEventListener('pointerup', () => { waveDragging = false; });
+
+  // Draggable frequency/dB readout cursor on the captured spectrum graph
+  function updateCursorFromEvent(clientX){
+    const rect = fftCanvas.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    cursorFreq = xToFreq(frac, 1);
+    if (lastCapture) drawFrozenSpectrum(lastCapture);
+  }
+  fftCanvas.addEventListener('pointerdown', (evt) => {
+    if (!lastCapture || isPlaying) return;
+    draggingCursor = true;
+    updateCursorFromEvent(evt.clientX);
+  });
+  window.addEventListener('pointermove', (evt) => {
+    if (!draggingCursor) return;
+    updateCursorFromEvent(evt.clientX);
+  });
+  window.addEventListener('pointerup', () => { draggingCursor = false; });
+
+  function stopPlaybackInternal(){
+    if (audioEl){ audioEl.pause(); }
+    isPlaying = false;
+    cancelAnimationFrame(rafId);
+    playBtn.innerHTML = '&#9658;';
+  }
+
+  function resetTransportUI(){
+    isPlaying = false;
+    playBtn.innerHTML = '&#9658;';
+    curTimeEl.textContent = '0:00.000';
+    scrub.value = 0;
+    const entry = library.find(f => f.id === activeId);
+    if (entry) drawWaveformOverview(waveCanvas, entry.audioBuffer, 0);
+  }
+
+  function hideSheetPlaceholderDuringPlay(){
+    // leave prior sheet visible until a new capture happens
+  }
+
+  // ---------------- Drawing: waveform overview ----------------
+  // `durationSec`, if given, adds time-axis tick labels along the bottom
+  // (used on the bigger Compare-page previews for extra detail).
+  function drawWaveformOverview(canvasEl, audioBuffer, playheadFrac, durationSec){
+    const ctx = canvasEl.getContext('2d');
+    const w = canvasEl.width, h = canvasEl.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle = '#f4f4f0';
+    ctx.fillRect(0,0,w,h);
+
+    const mid = h/2;
+
+    // subtle horizontal centre + quarter lines for amplitude reference
+    ctx.strokeStyle = '#e2e2dc';
+    ctx.lineWidth = 1;
+    [0.25, 0.5, 0.75].forEach(f => {
+      const y = h*f;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+    });
+
+    const data = audioBuffer.getChannelData(0);
+    const step = Math.ceil(data.length / w);
+    ctx.strokeStyle = '#1f9d5c';
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++){
+      let min = 1, max = -1;
+      const start = x*step;
+      for (let i = 0; i < step; i++){
+        const v = data[start+i] || 0;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      ctx.moveTo(x, mid + min*mid*0.9);
+      ctx.lineTo(x, mid + max*mid*0.9);
+    }
+    ctx.stroke();
+
+    if (durationSec){
+      ctx.fillStyle = '#8a8a83';
+      ctx.font = '13px "JetBrains Mono", monospace';
+      const nTicks = 6;
+      for (let i = 0; i <= nTicks; i++){
+        const frac = i/nTicks;
+        const x = frac*w;
+        ctx.strokeStyle = '#eaeae5';
+        ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+        const label = fmtTime(frac*durationSec);
+        const lx = i === nTicks ? w - ctx.measureText(label).width - 4 : (i === 0 ? 4 : x - 20);
+        ctx.fillText(label, lx, h - 6);
+      }
+    }
+
+    if (typeof playheadFrac === 'number'){
+      const x = playheadFrac*w;
+      ctx.strokeStyle = '#111111';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x,0); ctx.lineTo(x,h);
+      ctx.stroke();
+    }
+  }
+
+  // ---------------- Drawing: spectrum screen ----------------
+  let FREQ_MIN = 50;
+  let FREQ_MAX = 1000;
+  let freqScaleMode = 'linear'; // 'linear' | 'log'
+  let OCTAVE_FRACTION = 1/24; // fractional-octave smoothing; 0 = off (raw)
+
+  // Auto-fit dB range: rather than a fixed -90..0 axis (which leaves most
+  // real recordings — quieter than 0 dBFS — squashed near the bottom), each
+  // graph picks a [dbMin, dbMax] that hugs its own curve with a little
+  // padding, so the shape actually fills the chart.
+  function autoDbRange(values){
+    let lo = Infinity, hi = -Infinity;
+    for (const v of values){
+      if (!isFinite(v)) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (!isFinite(lo) || !isFinite(hi)) return { dbMin: -90, dbMax: 0 };
+    let dbMax = Math.min(6, Math.ceil((hi + 6) / 10) * 10);
+    let dbMin = Math.max(-120, Math.floor((lo - 6) / 10) * 10);
+    if (dbMax - dbMin < 20) dbMin = dbMax - 20; // guard against a near-flat curve
+    return { dbMin, dbMax };
+  }
+
+  // Shared with traceYAtFreq (used when hit-testing/dragging a trace on the
+  // Compare graph) so curve-picking stays in sync with whatever range
+  // drawCompareGraph most recently auto-fit to.
+  let compareDbMin = -90, compareDbMax = 0;
+
+  // Canvas x-position (0..w) for a given frequency, honouring the current scale mode.
+  function freqToX(freq, w){
+    const f = Math.max(FREQ_MIN, Math.min(FREQ_MAX, freq));
+    if (freqScaleMode === 'log'){
+      const lo = Math.log10(Math.max(1, FREQ_MIN));
+      const hi = Math.log10(Math.max(lo + 0.0001, FREQ_MAX));
+      return ((Math.log10(Math.max(1, f)) - lo) / (hi - lo)) * w;
+    }
+    return ((f - FREQ_MIN) / (FREQ_MAX - FREQ_MIN)) * w;
+  }
+
+  // Frequency for a given canvas x-position (0..w), honouring the current scale mode.
+  function xToFreq(x, w){
+    const frac = Math.min(1, Math.max(0, x / w));
+    if (freqScaleMode === 'log'){
+      const lo = Math.log10(Math.max(1, FREQ_MIN));
+      const hi = Math.log10(Math.max(lo + 0.0001, FREQ_MAX));
+      return Math.pow(10, lo + frac*(hi - lo));
+    }
+    return FREQ_MIN + frac*(FREQ_MAX - FREQ_MIN);
+  }
+
+  // Tick frequencies for the x-axis: evenly spaced for linear, 1-2-5 per
+  // decade for log (the conventional way to label a log frequency axis).
+  function computeFreqTicks(){
+    const ticks = [];
+    if (freqScaleMode === 'log'){
+      const lo = Math.max(1, FREQ_MIN), hi = FREQ_MAX;
+      let mag = Math.pow(10, Math.floor(Math.log10(lo)));
+      let guard = 0;
+      while (mag <= hi && guard < 20){
+        [1,2,5].forEach(m => {
+          const v = mag*m;
+          if (v >= lo && v <= hi) ticks.push(Math.round(v*100)/100);
+        });
+        mag *= 10;
+        guard++;
+      }
+      if (ticks.length < 2) return [FREQ_MIN, FREQ_MAX];
+      return ticks;
+    }
+    const n = 6;
+    for (let i = 0; i <= n; i++){
+      ticks.push(Math.round(FREQ_MIN + (i/n)*(FREQ_MAX - FREQ_MIN)));
+    }
+    return ticks;
+  }
+
+  // Averages `values` across a fractional-octave window centred on bin `idx`
+  // (bins are assumed linearly spaced at `binHz` apart).
+  function octaveAverage(values, binHz, idx, fraction){
+    const f = idx * binHz;
+    if (f <= 0) return values[idx];
+    const factor = Math.pow(2, fraction/2);
+    let lo = Math.max(0, Math.round((f/factor)/binHz));
+    let hi = Math.min(values.length - 1, Math.round((f*factor)/binHz));
+    if (hi < lo) hi = lo;
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) sum += values[j];
+    return sum / (hi - lo + 1);
+  }
+
+  // Smoothed dBFS level at an arbitrary frequency, for the draggable cursor
+  // and for per-pixel curve rendering (works for both linear and log axes).
+  function getSmoothedDbAtFreq(capture, freq){
+    const binHz = capture.sampleRate / capture.N;
+    const idx = Math.max(0, Math.min(capture.mags.length - 1, Math.round(freq / binHz)));
+    const avgMag = octaveAverage(capture.mags, binHz, idx, OCTAVE_FRACTION);
+    return 20*Math.log10(avgMag + 1e-12);
+  }
+
+  function drawGrid(ctx, w, h){
+    ctx.strokeStyle = '#e2e2dc';
+    ctx.lineWidth = 1;
+    computeFreqTicks().forEach(f => {
+      const x = freqToX(f, w);
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+      ctx.fillStyle = '#6b6b64';
+      ctx.font = '14px "JetBrains Mono", monospace';
+      const label = (f >= 1000 ? (f/1000).toFixed(f % 1000 === 0 ? 0 : 1) + 'k' : f) + ' Hz';
+      const lx = Math.min(w - ctx.measureText(label).width - 4, Math.max(4, x + 5));
+      ctx.fillText(label, lx, h - 8);
+    });
+    for (let i = 1; i < 6; i++){
+      const y = (h/6)*i;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+    }
+  }
+
+  function liveDraw(){
+    if (!isPlaying) return;
+    const ctx = fftCanvas.getContext('2d');
+    const w = fftCanvas.width, h = fftCanvas.height;
+    const data = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(data);
+
+    ctx.clearRect(0,0,w,h);
+    drawGrid(ctx, w, h);
+
+    const sr = audioCtx.sampleRate;
+    const fftSize = analyser.fftSize;
+    const binHz = sr / fftSize;
+    const minDb = analyser.minDecibels, maxDb = analyser.maxDecibels;
+
+    ctx.beginPath();
+    ctx.strokeStyle = '#0f8a4c';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = 'rgba(15,138,76,0.35)';
+    ctx.shadowBlur = 5;
+    for (let x = 0; x < w; x++){
+      const freq = xToFreq(x, w);
+      const idx = Math.max(0, Math.min(data.length - 1, Math.round(freq/binHz)));
+      const db = octaveAverage(data, binHz, idx, OCTAVE_FRACTION);
+      const norm = Math.max(0, Math.min(1, (db - minDb)/(maxDb - minDb)));
+      const y = h - norm*h;
+      if (x === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    rafId = requestAnimationFrame(liveDraw);
+  }
+
+  function drawFrozenSpectrum(capture){
+    const ctx = fftCanvas.getContext('2d');
+    const w = fftCanvas.width, h = fftCanvas.height;
+    ctx.clearRect(0,0,w,h);
+    drawGrid(ctx, w, h);
+
+    const { normOffset } = capture;
+    const curveVals = new Array(w);
+    for (let x = 0; x < w; x++) curveVals[x] = getSmoothedDbAtFreq(capture, xToFreq(x, w));
+    const { dbMin, dbMax } = autoDbRange(curveVals);
+
+    // Left-side axis: relative dB (peak = 100 dB), derived from the same
+    // dBFS gridlines drawGrid() already lays down horizontally.
+    ctx.fillStyle = '#6b6b64';
+    ctx.font = '13px "JetBrains Mono", monospace';
+    for (let i = 0; i <= 6; i++){
+      const dbfsAtLine = dbMax - (i/6)*(dbMax - dbMin);
+      const relAtLine = dbfsAtLine + normOffset;
+      const y = (h/6)*i;
+      ctx.fillText(relAtLine.toFixed(0) + ' dB', 6, Math.max(13, y - 3));
+    }
+
+    ctx.beginPath();
+    ctx.strokeStyle = '#b5690a';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = 'rgba(181,105,10,0.3)';
+    ctx.shadowBlur = 5;
+    for (let x = 0; x < w; x++){
+      const db = Math.max(dbMin, Math.min(dbMax, curveVals[x]));
+      const norm = (db - dbMin)/(dbMax - dbMin);
+      const y = h - norm*h;
+      if (x === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // mark strongest peak within the displayed frequency range
+    const peaksInRange = capture.peaks.filter(p => p.freq >= FREQ_MIN && p.freq <= FREQ_MAX);
+    if (peaksInRange.length){
+      const top = peaksInRange[0];
+      const x = freqToX(top.freq, w);
+      ctx.strokeStyle = 'rgba(181,105,10,0.45)';
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#b5690a';
+      ctx.font = '15px "JetBrains Mono", monospace';
+      const lx = Math.min(w-150, x+8);
+      ctx.fillText(fmtHz(top.freq), lx, 18);
+      ctx.font = '13px "JetBrains Mono", monospace';
+      ctx.fillText(`${(top.db+normOffset).toFixed(1)} dB rel  /  ${top.db.toFixed(1)} dBFS`, lx, 33);
+    }
+
+    // draggable readout cursor (independent of the peak marker)
+    if (cursorFreq != null && cursorFreq >= FREQ_MIN && cursorFreq <= FREQ_MAX){
+      const cx = freqToX(cursorFreq, w);
+      const dbfs = getSmoothedDbAtFreq(capture, cursorFreq);
+      const clamped = Math.max(dbMin, Math.min(dbMax, dbfs));
+      const cy = h - ((clamped - dbMin)/(dbMax - dbMin)) * h;
+
+      ctx.strokeStyle = '#2f6fb0';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,h); ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#2f6fb0';
+      ctx.beginPath(); ctx.arc(cx, cy, 4.5, 0, Math.PI*2); ctx.fill();
+
+      const relDb = dbfs + normOffset;
+      const labelY = h - 50;
+      const clx = Math.min(w-155, Math.max(4, cx+8));
+      ctx.font = '15px "JetBrains Mono", monospace';
+      ctx.fillText(fmtHz(cursorFreq), clx, labelY);
+      ctx.font = '13px "JetBrains Mono", monospace';
+      ctx.fillText(`${relDb.toFixed(1)} dB rel  /  ${dbfs.toFixed(1)} dBFS`, clx, labelY+15);
+    }
+  }
+
+  function resetScreen(mode){
+    screenBadge.className = 'screen-badge' + (mode === 'live' ? ' live' : mode === 'frozen' ? ' frozen' : '');
+    screenBadge.textContent = mode === 'live' ? 'live' : mode === 'frozen' ? 'captured' : 'idle';
+    if (mode === 'idle'){
+      const ctx = fftCanvas.getContext('2d');
+      ctx.clearRect(0,0,fftCanvas.width, fftCanvas.height);
+      drawGrid(ctx, fftCanvas.width, fftCanvas.height);
+      screenStamp.textContent = '';
+    }
+  }
+
+  // ---------------- Capture + data sheet ----------------
+  const PEAK_TARGET_DB = 100;
+
+  function captureSpectrum(entry, time){
+    const capture = computeSpectrumAt(entry.audioBuffer, time, 4096, 65536);
+    // Normalise so the strongest peak reads as 100 dB (relative scale),
+    // everything else scaled down by the same fixed offset.
+    capture.normOffset = capture.peaks.length ? (PEAK_TARGET_DB - capture.peaks[0].db) : 0;
+    lastCapture = capture;
+    resetScreen('frozen');
+    drawFrozenSpectrum(capture);
+    screenStamp.textContent = `CAPTURED @ ${fmtTime(time)}`;
+    renderSheet(entry, capture);
+  }
+
+  function resetSheet(){
+    sheetSub.textContent = '';
+    sheetBody.innerHTML = '<div class="placeholder">Press play, then press stop at any moment — a spectrum snapshot and data sheet will be captured at that exact point in the recording.</div>';
+    exportBtn.disabled = true;
+  }
+
+  function renderSheet(entry, capture){
+    sheetSub.textContent = `— ${entry.name} @ ${fmtTime(capture.time)}`;
+    const top = capture.peaks[0];
+    const info = entry.wavInfo;
+    const off = capture.normOffset;
+
+    const statsHtml = `
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Peak Frequency</div><div class="v accent">${top ? fmtHz(top.freq) : '—'}</div></div>
+        <div class="stat"><div class="k">Peak Level (rel)</div><div class="v accent">${top ? (top.db+off).toFixed(1)+' dB' : '—'}</div></div>
+        <div class="stat"><div class="k">Peak Level (dBFS)</div><div class="v">${top ? top.db.toFixed(1)+' dB' : '—'}</div></div>
+        <div class="stat"><div class="k">Window RMS</div><div class="v">${capture.rms.toFixed(4)}</div></div>
+        <div class="stat"><div class="k">Analysis Window</div><div class="v">${capture.M} smp</div></div>
+        <div class="stat"><div class="k">FFT Size (padded)</div><div class="v">${capture.N}</div></div>
+        <div class="stat"><div class="k">Sample Rate</div><div class="v">${capture.sampleRate.toLocaleString()} Hz</div></div>
+        <div class="stat"><div class="k">Channels</div><div class="v">${info ? info.numChannels : entry.audioBuffer.numberOfChannels}</div></div>
+        <div class="stat"><div class="k">Bit Depth</div><div class="v">${info ? info.bitsPerSample+'-bit' : '—'}</div></div>
+        <div class="stat"><div class="k">Duration</div><div class="v">${fmtTime(entry.audioBuffer.duration)}</div></div>
+      </div>
+      <div class="placeholder" style="text-align:left;padding:0 2px 18px;">
+        "Rel" is a normalised scale where the strongest peak in this capture is set to 100 dB and everything else is scaled down by the same fixed amount — it is not calibrated acoustic SPL. "dBFS" is the raw, uncalibrated digital level (0 dB = loudest a sample can be; negative is normal).
+      </div>
+    `;
+
+    const rows = capture.peaks.length ? capture.peaks.map((p,i) => `
+      <tr>
+        <td class="rank">${i+1}</td>
+        <td class="freq">${fmtHz(p.freq)}</td>
+        <td>${(p.db+off).toFixed(1)} dB</td>
+        <td>${p.db.toFixed(1)} dBFS</td>
+        <td>${p.mag.toExponential(2)}</td>
+      </tr>`).join('') : `<tr><td colspan="5" style="color:var(--text-faint);">No distinct peaks above the noise floor at this instant.</td></tr>`;
+
+    const tableHtml = `
+      <table class="peaks">
+        <thead><tr><th>#</th><th>Frequency</th><th>Level (rel)</th><th>Level (dBFS)</th><th>Magnitude</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    sheetBody.innerHTML = statsHtml + tableHtml;
+    exportBtn.disabled = false;
+  }
+
+  exportBtn.addEventListener('click', () => {
+    if (!lastCapture) return;
+    const entry = library.find(f => f.id === activeId);
+    const capture = lastCapture;
+    const off = capture.normOffset;
+    let csv = 'Waveform Lab — Spectrum Data Sheet\n';
+    csv += `File,${entry ? entry.name : ''}\n`;
+    csv += `Capture Time (s),${capture.time.toFixed(6)}\n`;
+    csv += `Sample Rate (Hz),${capture.sampleRate}\n`;
+    csv += `Analysis Window (samples),${capture.M}\n`;
+    csv += `FFT Size (zero-padded),${capture.N}\n`;
+    csv += `Window RMS,${capture.rms.toFixed(6)}\n`;
+    csv += `Normalisation,Peak set to ${PEAK_TARGET_DB} dB (rel), offset ${off.toFixed(2)} dB applied to dBFS\n\n`;
+    csv += 'Top Peaks\nRank,Frequency (Hz),Level (rel dB),Level (dBFS),Magnitude\n';
+    capture.peaks.forEach((p,i) => {
+      csv += `${i+1},${p.freq.toFixed(2)},${(p.db+off).toFixed(2)},${p.db.toFixed(2)},${p.mag.toExponential(4)}\n`;
+    });
+    csv += '\nFull Spectrum\nFrequency (Hz),Level (rel dB),Level (dBFS),Magnitude\n';
+    for (let k = 0; k < capture.freqs.length; k++){
+      csv += `${capture.freqs[k].toFixed(2)},${(capture.dbs[k]+off).toFixed(2)},${capture.dbs[k].toFixed(2)},${capture.mags[k].toExponential(4)}\n`;
+    }
+    const blob = new Blob([csv], {type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const base = entry ? entry.name.replace(/\.wav$/i,'') : 'capture';
+    a.download = `${base}_spectrum_${capture.time.toFixed(2)}s.csv`;
+    a.click();
+  });
+
+  // ---------------- File input wiring ----------------
+  fileInput.addEventListener('change', (e) => addFiles(e.target.files));
+  ;['dragover','dragenter'].forEach(evtName => {
+    dropzone.addEventListener(evtName, (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
+  });
+  ;['dragleave','drop'].forEach(evtName => {
+    dropzone.addEventListener(evtName, (e) => { e.preventDefault(); dropzone.classList.remove('drag'); });
+  });
+  dropzone.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+
+  // ---------------- Resizable side panels ----------------
+  // Drag the thin divider between the library panel and the workspace to
+  // widen the sidebar — handy when a filename is too long to read in the
+  // default width. Each page remembers its own width independently (set as
+  // a --lib-w custom property scoped to that page's own .grid element), and
+  // the responsive collapse-to-single-column breakpoints are untouched since
+  // they set grid-template-columns directly, bypassing the variable.
+  function makeResizable(handleEl, minPx, maxPx){
+    if (!handleEl) return;
+    const gridEl = handleEl.parentElement;
+    const leftPanel = handleEl.previousElementSibling;
+    if (!gridEl || !leftPanel) return;
+    let dragging = false, startX = 0, startW = 0;
+    handleEl.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startW = leftPanel.getBoundingClientRect().width;
+      document.body.classList.add('resizing');
+      e.preventDefault();
+    });
+    window.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const newW = Math.min(maxPx, Math.max(minPx, startW + (e.clientX - startX)));
+      gridEl.style.setProperty('--lib-w', newW + 'px');
+    });
+    window.addEventListener('pointerup', () => {
+      dragging = false;
+      document.body.classList.remove('resizing');
+    });
+  }
+  makeResizable(el('resizeAnalyze'), 200, 640);
+  makeResizable(el('resizeCompare'), 260, 720);
+  makeResizable(el('resizeTap'), 200, 640);
+  makeResizable(el('resizeCluster'), 300, 760);
+
+  // ---------------- Scatter graph: click a dot to see its data ----------------
+  function getScatterCanvasPos(clientX, clientY){
+    const rect = scatterCanvas.getBoundingClientRect();
+    const scaleX = scatterCanvas.width / rect.width;
+    const scaleY = scatterCanvas.height / rect.height;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  }
+
+  function findScatterPointAt(clientX, clientY){
+    const { x, y } = getScatterCanvasPos(clientX, clientY);
+    const hitR = 10; // a little bigger than the dot itself, forgiving to click
+    let best = null, bestDist = Infinity;
+    for (const pt of scatterPoints){
+      const d = Math.hypot(pt.cx - x, pt.cy - y);
+      if (d <= hitR && d < bestDist){ best = pt; bestDist = d; }
+    }
+    return best;
+  }
+
+  // Two or more points can sit close enough together that their dots
+  // visually touch or overlap — a single click there is ambiguous about
+  // which one the user meant. So: find the closest point to the click, then
+  // gather every other point clustered right on top of *that* one (not just
+  // whatever else happens to be near the click itself) and return them all,
+  // closest first, so the tooltip can list every dataset under the cursor.
+  function findScatterClusterAt(clientX, clientY){
+    const anchor = findScatterPointAt(clientX, clientY);
+    if (!anchor) return [];
+    const clusterR = 13; // a little larger than two touching dot radii (5.5px each)
+    return scatterPoints
+      .map(pt => ({ pt, d: Math.hypot(pt.cx - anchor.cx, pt.cy - anchor.cy) }))
+      .filter(o => o.d <= clusterR)
+      .sort((a,b) => a.d - b.d)
+      .map(o => o.pt);
+  }
+
+  function scatterStatBlock(pt){
+    return `
+      <div class="tt-entry">
+        <div class="tt-title"><span class="tt-swatch" style="background:${pt.color};"></span>${pt.label}</div>
+        <div class="tt-grid">
+          <div class="tt-stat"><b>${pt.freq.toFixed(1)} Hz</b><span>Frequency</span></div>
+          <div class="tt-stat"><b>${pt.avgPct.toFixed(1)}%</b><span>Avg level</span></div>
+          <div class="tt-stat"><b>${pt.appearances}/${pt.eventCount}</b><span>Appears in</span></div>
+          <div class="tt-stat"><b>${pt.minPct.toFixed(1)}–${pt.maxPct.toFixed(1)}%</b><span>Range</span></div>
+          <div class="tt-stat"><b>±${pt.stdPct.toFixed(2)}%</b><span>Std (energy)</span></div>
+          <div class="tt-stat"><b>±${pt.stdHz.toFixed(3)} Hz</b><span>Drift</span></div>
+        </div>
+      </div>`;
+  }
+
+  function showScatterTooltip(pts){
+    const multi = pts.length > 1;
+    scatterTooltip.classList.toggle('multi', multi);
+    scatterTooltip.innerHTML =
+      (multi ? `<div class="tt-multi-note">${pts.length} overlapping points — closest first</div>` : '') +
+      pts.map(scatterStatBlock).join('');
+    scatterTooltip.classList.add('visible');
+
+    // Position the tooltip right beside the (closest) dot that was clicked,
+    // in the canvas's on-screen CSS pixel space, not its internal
+    // drawing-buffer space — flipping to the other side / clamping so it
+    // never spills outside the bordered "screen" box the canvas sits in.
+    const pt = pts[0];
+    const rect = scatterCanvas.getBoundingClientRect();
+    const scaleX = scatterCanvas.width / rect.width;
+    const scaleY = scatterCanvas.height / rect.height;
+    const cssX = pt.cx / scaleX;
+    const cssY = pt.cy / scaleY;
+
+    const container = scatterCanvas.parentElement;
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
+    const tw = scatterTooltip.offsetWidth;
+    const th = scatterTooltip.offsetHeight;
+
+    let left = scatterCanvas.offsetLeft + cssX + 14;
+    if (left + tw > containerW - 4) left = scatterCanvas.offsetLeft + cssX - tw - 14;
+    left = Math.max(4, left);
+
+    let top = scatterCanvas.offsetTop + cssY - th / 2;
+    top = Math.max(4, Math.min(top, containerH - th - 4));
+
+    scatterTooltip.style.left = left + 'px';
+    scatterTooltip.style.top = top + 'px';
+  }
+
+  scatterCanvas.addEventListener('click', (e) => {
+    const pts = findScatterClusterAt(e.clientX, e.clientY);
+    if (pts.length) showScatterTooltip(pts);
+    else scatterTooltip.classList.remove('visible');
+  });
+  scatterCanvas.addEventListener('mousemove', (e) => {
+    const pt = findScatterPointAt(e.clientX, e.clientY);
+    scatterCanvas.style.cursor = pt ? 'pointer' : 'default';
+  });
+
+  // ---------------- Restore saved folder ----------------
+  async function restoreLibraries(){
+    // Rebuilds the shared File Folder from IndexedDB after a reload —
+    // including each file's Crop Start / Crop End — so it's still there
+    // next time. Waveform Lab, Compare, Tap Analyser and Clustering are no
+    // longer auto-persisted themselves; each reload starts with an empty
+    // working list in those tools until files are loaded fresh or pulled
+    // in from this folder.
+    try{
+      const groupRecords = await idbGetAll('fileFolderGroups');
+      folderGroups = groupRecords.map(rec => ({ id: rec.id, name: rec.name }));
+      sortByName(folderGroups);
+
+      const folderRecords = await idbGetAll('fileFolder');
+      for (const rec of folderRecords){
+        try{
+          const tmpCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const audioBuffer = await tmpCtx.decodeAudioData(rec.arrayBuffer.slice(0));
+          folderLibrary.push({
+            id: rec.id, name: rec.name, size: rec.size, audioBuffer,
+            skipStart: rec.skipStart || '', skipEnd: rec.skipEnd || '',
+            folderId: rec.folderId || null,
+            _rawBuffer: rec.arrayBuffer
+          });
+          tmpCtx.close();
+        }catch(err){
+          console.warn('Could not restore', rec.name, err);
+        }
+      }
+      if (folderLibrary.length || folderGroups.length){
+        sortByName(folderLibrary);
+        renderFolderRows();
+      }
+    }catch(err){
+      console.warn('Could not restore local file folder', err);
+    }
+  }
+
+  // ---------------- Init ----------------
+  resetScreen('idle');
+  renderCompareRows();
+  drawCompareGraph();
+  resetPreview();
+  updateFreqRangeLabels();
+  renderTapRows();
+  renderClusterRows();
+  renderFolderRows();
+  restoreLibraries();
+})();
