@@ -131,6 +131,8 @@ export function refreshTapEditor(){
   }
   if (playingId !== (entry && entry.id)) resetPlayback(entry);
   el('tapPlayBtn').disabled = !entry;
+  ['tapZoomIn', 'tapZoomOut', 'tapZoomFit', 'tapZoomCrop'].forEach((id) => { el(id).disabled = !entry; });
+  if (!entry) el('tapZoomLabel').textContent = '';
   el('tapDurTime').textContent = fmtTime(entry ? entry.audioBuffer.duration : 0);
   el('tapEditorResetCrop').disabled = !entry || ((entry.skipStart || '') === '' && (entry.skipEnd || '') === '');
   el('tapEditorResetTaps').disabled = !entry || entry.taps == null;
@@ -138,15 +140,15 @@ export function refreshTapEditor(){
 }
 
 // ---------------- playback ----------------
-function showPosition(t){
+function showPosition(t, follow = false){
   el('tapCurTime').textContent = fmtTime(t);
-  editor.setPlayhead(t);
+  editor.setPlayhead(t, follow);
 }
 
 function stopTicker(){ cancelAnimationFrame(ticker); ticker = null; }
 
 function tick(){
-  showPosition(player.position());
+  showPosition(player.position(), true);
   ticker = player.playing ? requestAnimationFrame(tick) : null;
 }
 
@@ -189,7 +191,13 @@ export function init(){
   player = createPlayer({ onEnded: () => { stopTicker(); updatePlayButton(); showPosition(player.position()); } });
   el('tapPlayBtn').addEventListener('click', togglePlay);
 
-  editor = createTapEditor(el('tapEditorCanvas'), {
+  editor = createTapEditor(el('tapEditorCanvas'), el('tapEditorOverview'), {
+    onZoom: ({ start, end, duration }) => {
+      const zoom = duration / (end - start);
+      el('tapZoomLabel').textContent = zoom < 1.01
+        ? 'whole recording'
+        : `${fmtTime(start)} – ${fmtTime(end)} · ×${zoom < 10 ? zoom.toFixed(1) : Math.round(zoom)}`;
+    },
     onSeek: (t) => {
       const entry = selectedTapEntry();
       if (!entry) return;
@@ -216,6 +224,17 @@ export function init(){
   });
 
   el('tapEditorSelect').addEventListener('change', (e) => selectTapEntry(e.target.value));
+  el('tapZoomIn').addEventListener('click', () => editor.zoomBy(0.5));
+  el('tapZoomOut').addEventListener('click', () => editor.zoomBy(2));
+  el('tapZoomFit').addEventListener('click', () => editor.fit());
+  el('tapZoomCrop').addEventListener('click', () => {
+    const entry = selectedTapEntry();
+    if (!entry) return;
+    const v = tapView(entry);
+    const end = entry.audioBuffer.duration - v.cropEnd;
+    const pad = 0.02 * (end - v.cropStart);
+    editor.zoomTo(v.cropStart - pad, end + pad);
+  });
   for (const [id, key] of [['tapCropStart', 'skipStart'], ['tapCropEnd', 'skipEnd']]){
     el(id).addEventListener('change', (e) => {
       const entry = selectedTapEntry();

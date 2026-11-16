@@ -10,8 +10,13 @@ const DUR = A1.samples.length / SR;
 async function editor(page) {
   const canvas = page.locator('#tapEditorCanvas');
   const box = await canvas.boundingBox();
+  const view = async () => [Number(await canvas.getAttribute('data-view-start')), Number(await canvas.getAttribute('data-view-end'))];
   return {
     canvas,
+    view,
+    box,
+    // Page position of time t in the currently visible window.
+    atView: async (t, y = 0.5) => { const [a, b] = await view(); return { x: box.x + ((t - a) / (b - a)) * box.width, y: box.y + box.height * y }; },
     at: (t, y = 0.5) => ({ x: box.x + (t / DUR) * box.width, y: box.y + box.height * y }),
     count: async () => Number(await canvas.getAttribute('data-tap-count')),
     cropStart: async () => Number(await canvas.getAttribute('data-crop-start')),
@@ -38,6 +43,11 @@ test('tap editor: drag the crop, add/remove taps, analyse exactly what is shown'
   const summary = page.locator('#tapEditorSummary');
   await expect(summary).toContainText('Crop start: auto →');
   await expect(ed.canvas).toHaveAttribute('data-tap-count', '4');
+
+  // A click on the crop edge without moving it is not an edit.
+  const edgeAt = ed.at(await ed.cropStart());
+  await page.mouse.click(edgeAt.x, edgeAt.y);
+  await expect(summary).toContainText('Crop start: auto →');
 
   // Drag the auto crop edge back to the start: the crop becomes manual,
   // the row input follows and detection finds the first tap too.
@@ -105,6 +115,80 @@ test('tap editor: typed crop, click-to-seek and playback', async ({ page }) => {
   const paused = await page.locator('#tapCurTime').innerText();
   await page.waitForTimeout(300);
   await expect(page.locator('#tapCurTime')).toHaveText(paused);
+  expect(errors).toEqual([]);
+});
+
+test('tap editor: zoom, pan and edit while zoomed', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors = await openApp(page);
+  await gotoTab(page, 'tap');
+  await page.locator('#fileInputTap').setInputFiles(wavFile('a1.wav', A1.samples));
+  await waitDetected(page);
+  const ed = await editor(page);
+  const label = page.locator('#tapZoomLabel');
+  await expect(label).toHaveText('whole recording');
+
+  // Buttons zoom around the playhead while it's visible (at 0 before playback).
+  await page.locator('#tapZoomIn').click();
+  await page.locator('#tapZoomIn').click();
+  let [a, b] = await ed.view();
+  expect(b - a).toBeCloseTo(DUR / 4, 3);
+  expect(a).toBe(0);
+  // Moving the playhead moves the zoom anchor with it.
+  const mid = await ed.atView(0.3, 0.85);
+  await page.mouse.click(mid.x, mid.y); // playhead to 0.3 s, 24% across [0, 1.25]
+  await expect(page.locator('#tapCurTime')).toHaveText(/^0:00\.(29|30)/);
+  await page.locator('#tapZoomIn').click();
+  [a, b] = await ed.view();
+  expect(b - a).toBeCloseTo(DUR / 8, 3);
+  expect((0.3 - a) / (b - a)).toBeCloseTo(0.24, 1); // ...and it stays 24% across
+  await expect(label).toContainText('×8.0');
+  await page.locator('#tapZoomFit').click();
+  await expect(label).toHaveText('whole recording');
+
+  // Ctrl + wheel zooms around the cursor: the time under it stays put.
+  const p = ed.at(1.4);
+  await page.mouse.move(p.x, p.y);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -600);
+  await page.keyboard.up('Control');
+  [a, b] = await ed.view();
+  expect(b - a).toBeLessThan(DUR / 2);
+  expect(a + ((p.x - ed.box.x) / ed.box.width) * (b - a)).toBeCloseTo(1.4, 2);
+
+  // Dragging on the overview strip pans without changing the zoom.
+  const span = b - a;
+  const ov = await page.locator('#tapEditorOverview').boundingBox();
+  const from = { x: ov.x + ((a + b) / 2 / DUR) * ov.width, y: ov.y + ov.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + ov.width * 0.3, from.y, { steps: 6 });
+  await page.mouse.up();
+  const [a2, b2] = await ed.view();
+  expect(b2 - a2).toBeCloseTo(span, 3);
+  expect(a2).toBeGreaterThan(a + 1);
+
+  // Edit while zoomed: add a tap at 4.6 s and remove it again.
+  await page.locator('#tapZoomCrop').click();
+  await page.locator('#tapZoomIn').click();
+  const before = await ed.count();
+  const [c0, c1] = await ed.view();
+  const t = (c0 + c1) / 2;
+  const spot = await ed.atView(t, 0.6);
+  await page.mouse.dblclick(spot.x, spot.y);
+  await expect(ed.canvas).toHaveAttribute('data-tap-count', String(before + 1));
+  await page.mouse.click(spot.x, spot.y, { button: 'right' });
+  await expect(ed.canvas).toHaveAttribute('data-tap-count', String(before));
+
+  // While playing, the view follows the playhead off the right edge.
+  await page.locator('#tapZoomFit').click();
+  for (let i = 0; i < 4; i++) await page.locator('#tapZoomIn').click(); // ×16 around the playhead: ~0.31 s wide
+  const [v0, v1] = await ed.view();
+  const left = await ed.atView(v0 + 0.01, 0.85);
+  await page.mouse.click(left.x, left.y); // playhead near the left edge
+  await page.locator('#tapPlayBtn').click();
+  await expect.poll(async () => (await ed.view())[0], { timeout: 5000 }).toBeGreaterThan(v1 - 0.05);
+  await page.locator('#tapPlayBtn').click();
   expect(errors).toEqual([]);
 });
 

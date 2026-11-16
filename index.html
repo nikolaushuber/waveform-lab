@@ -324,7 +324,15 @@
         <div class="screen">
           <canvas id="tapEditorCanvas" width="1200" height="180"></canvas>
         </div>
-        <div class="te-hint">Click to move the playhead · drag the red edges to crop · drag a tap to move it · double-click to add a tap · right-click a tap to remove it · hold Alt to place a tap exactly instead of snapping to its attack. Blue bands show each tap's analysis window.</div>
+        <canvas id="tapEditorOverview" width="1200" height="34"></canvas>
+        <div class="te-zoom">
+          <button class="text-btn" type="button" id="tapZoomOut" title="Zoom out">&minus;</button>
+          <button class="text-btn" type="button" id="tapZoomIn" title="Zoom in">+</button>
+          <button class="text-btn" type="button" id="tapZoomFit" title="Show the whole recording">Fit</button>
+          <button class="text-btn" type="button" id="tapZoomCrop" title="Zoom to the cropped range">Zoom to crop</button>
+          <span class="te-zoom-label" id="tapZoomLabel"></span>
+        </div>
+        <div class="te-hint">Ctrl/⌘ + scroll or pinch to zoom · scroll sideways or Shift + scroll to pan · drag the strip below the recording to move around · click to move the playhead · drag the red edges to crop · drag a tap to move it · double-click to add a tap · right-click a tap to remove it · hold Alt to place a tap exactly instead of snapping to its attack. Blue bands show each tap's analysis window.</div>
       </div>
 
       <div class="panel">
