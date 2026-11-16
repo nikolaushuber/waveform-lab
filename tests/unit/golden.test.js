@@ -12,11 +12,26 @@ import { kmeansClusterAutoK } from '../../src/core/ml/kmeans.js';
 import { adjustedRandScore } from '../../src/core/ml/metrics.js';
 import { computeSpectrumAt } from '../../src/core/spectrum.js';
 import { analyseTapFile } from '../../src/core/tap/analyse.js';
-import { fakeAudioBuffer, toGolden } from '../helpers/signals.js';
+import { fakeAudioBuffer, seededRandom, toGolden } from '../helpers/signals.js';
 import { SR, recordings, TAP_DEFAULTS, CLUSTER_DEFAULTS, chord } from '../helpers/fixtures.js';
 
 const golden = (name) => `../golden/${name}.json`;
 const asJson = (v) => JSON.stringify(toGolden(v), null, 1) + '\n';
+
+describe('golden: fixtures', () => {
+  // Lets the Python tests (python/tests/test_fixtures.py) prove they generate
+  // the same synthetic recordings.
+  it('fixture signals', async () => {
+    const rnd = seededRandom(42);
+    const out = { prng42: Array.from({ length: 5 }, rnd), recordings: {} };
+    for (const r of recordings) {
+      const every997 = [];
+      for (let i = 0; i < r.samples.length; i += 997) every997.push(r.samples[i]);
+      out.recordings[r.name] = { length: r.samples.length, sum: r.samples.reduce((s, v) => s + v, 0), every997 };
+    }
+    await expect(JSON.stringify(out, null, 1) + '\n').toMatchFileSnapshot(golden('fixtures'));
+  });
+});
 
 describe('golden: Tap Analyser', () => {
   it.each(['amplitude', 'energy'])('analyseTapFile per recording (%s metric)', async (metric) => {

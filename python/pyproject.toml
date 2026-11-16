@@ -1,0 +1,25 @@
+[project]
+name = "waveform-lab"
+version = "0.0.0"
+description = "Analysis pipelines for Waveform Lab (run in the browser via Pyodide)"
+# Pinned to what the Pyodide release in src/engines/python-worker.js ships,
+# so local results match the browser.
+requires-python = ">=3.14"
+dependencies = [
+    "numpy==2.4.3",
+    "scipy==1.18.0",
+    "scikit-learn==1.8.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
