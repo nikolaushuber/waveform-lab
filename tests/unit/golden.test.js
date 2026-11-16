@@ -5,7 +5,8 @@
 //
 // Regenerate deliberately with:  npm test -- -u
 import { describe, it, expect } from 'vitest';
-import { detectTapsRF, estimateNoiseSpectrumRF, extractWindowRF, fftFeaturesRF, getBinEdgesRF, trimSignalRF } from '../../src/core/cluster/features.js';
+import { detectTapsRF, estimateNoiseSpectrumRF, getBinEdgesRF } from '../../src/core/cluster/features.js';
+import { extractTapFeatures } from '../../src/core/cluster/pipeline.js';
 import { rfProximityClustering } from '../../src/core/ml/forest.js';
 import { kmeansClusterAutoK } from '../../src/core/ml/kmeans.js';
 import { adjustedRandScore } from '../../src/core/ml/metrics.js';
@@ -28,20 +29,17 @@ describe('golden: Tap Analyser', () => {
   });
 });
 
-// Same steps as runClusteringJS in script.js, minus the DOM.
-function clusterPipeline(files, o = CLUSTER_DEFAULTS) {
-  const X = [], meta = [], perFile = {};
+// The JavaScript clustering engine (runClusteringJS in src/ui/pages/cluster.js)
+// minus the DOM, plus the per-file onsets/noise profiles for easier debugging.
+async function clusterPipeline(files, o = CLUSTER_DEFAULTS) {
+  const perFile = {};
   for (const f of files) {
-    const samples = trimSignalRF(f.samples, SR, 0, 0);
-    const onsets = detectTapsRF(samples, SR, { minGapMs: o.minGapMs });
-    const noiseSpectrum = estimateNoiseSpectrumRF(samples, SR, onsets, o.windowMs);
-    perFile[f.name] = { onsets, noiseSpectrum };
-    onsets.forEach((onset, i) => {
-      const seg = extractWindowRF(samples, SR, onset, o.windowMs, o.offsetSec * 1000);
-      X.push(Array.from(fftFeaturesRF(seg, SR, { nBins: o.nBins, fmin: o.fmin, fmax: o.fmax, noiseSpectrum })));
-      meta.push({ file: f.name, tapIndex: i });
-    });
+    const onsets = detectTapsRF(f.samples, SR, { minGapMs: o.minGapMs });
+    perFile[f.name] = { onsets, noiseSpectrum: estimateNoiseSpectrumRF(f.samples, SR, onsets, o.windowMs) };
   }
+  const entries = files.map((f) => ({ name: f.name, audioBuffer: fakeAudioBuffer(f.samples, SR), cropStart: '', cropEnd: '' }));
+  const { X, meta } = await extractTapFeatures(entries,
+    { windowMs: o.windowMs, minGapMs: o.minGapMs, offsetMs: o.offsetSec * 1000, fmax: o.fmax, nBins: o.nBins, fmin: o.fmin });
   const km = kmeansClusterAutoK(X, { kRange: [2, 3, 4, 5, 6, 7, 8] });
   const rf = rfProximityClustering(X, km.k, { nEstimators: o.nEstimators, randomState: 42 });
   return {
@@ -53,8 +51,8 @@ function clusterPipeline(files, o = CLUSTER_DEFAULTS) {
   };
 }
 
-describe('golden: Clustering', () => {
-  const res = clusterPipeline(recordings);
+describe('golden: Clustering', async () => {
+  const res = await clusterPipeline(recordings);
 
   it('separates the two materials (sanity check on the golden input)', () => {
     const byFile = (labels) => Object.fromEntries(recordings.map((r) => [r.name, new Set(labels.filter((_, i) => res.meta[i].file === r.name))]));

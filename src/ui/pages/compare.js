@@ -343,8 +343,7 @@ export function updateCompareCursorFromEvent(clientX){
 
 export const TRACE_PICK_THRESHOLD = 28; // canvas px — how close a click must be to a curve to grab it
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   compareCanvas.addEventListener('pointerdown', (evt) => {
     const rect = compareCanvas.getBoundingClientRect();

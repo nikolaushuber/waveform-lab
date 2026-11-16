@@ -61,8 +61,7 @@ export function setSmoothing(val){
   redrawAllGraphs();
 }
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   document.querySelectorAll('.axis-bar').forEach(bar => {
     const minInput = bar.querySelector('.freq-min-input');

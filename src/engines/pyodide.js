@@ -1,10 +1,10 @@
 import PYTHON_CLUSTERING_SOURCE from './random_forest.py?raw';
 
 // ---------------- Clustering: "real Python" engine via Pyodide ----------------
-// Runs the *actual* functions from random_forest.py (copied verbatim below)
+// Runs the *actual* functions from random_forest.py (kept verbatim in ./random_forest.py)
 // inside the browser using a real CPython + numpy/scipy/scikit-learn build
 // (Pyodide, compiled to WebAssembly) instead of the JS reimplementation
-// above. This is the only way to get results that match your local Python
+// in src/core. This is the only way to get results that match your local Python
 // run, since JS and Python use different underlying random-number
 // generators for the Random Forest step — no amount of careful JS porting
 // can reproduce numpy's exact random sequence.
@@ -32,12 +32,11 @@ export function loadPyodideScriptTag(){
 
 // Verbatim (I/O and CLI-plumbing stripped) port of the algorithmic core of
 // random_forest.py, plus a thin JSON-in/JSON-out bridge function at the
-// bottom. Every function between the markers below is copied unmodified
+// bottom. Every function between the markers in it is copied unmodified
 // from the uploaded script — only load_wav_mono's file-reading and
 // build_dataset_unlabeled's folder-globbing were replaced, since audio
 // decoding happens in the browser (Web Audio API) rather than via
 // scipy.io.wavfile.read.
-// (the Python source now lives in ./random_forest.py, imported above)
 
 export async function ensurePyodideReady(onStatus){
   if (pyodideInstance && pyodidePackagesReady) return pyodideInstance;

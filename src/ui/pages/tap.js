@@ -438,8 +438,7 @@ export function showScatterTooltip(pts){
   scatterTooltip.style.top = top + 'px';
 }
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   tapMetricSelect.addEventListener('change', () => {
     tapMetricNote.textContent = TAP_METRIC_NOTES[tapMetricSelect.value] || '';

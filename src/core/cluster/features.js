@@ -1,3 +1,6 @@
+// Clustering DSP (client-side port of random_forest.py). These functions
+// were ported from random_forest.py and cross-checked numerically against
+// the real Python (numpy/scipy/scikit-learn) pipeline before being wired in.
 import { rfftMag } from '../fft.js';
 import { findPeaksHeightDistance } from '../signal.js';
 

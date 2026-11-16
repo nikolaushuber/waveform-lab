@@ -55,7 +55,7 @@ export function smoothMovingAvg(arr, winSamples){
 }
 
 // Amplitude envelope via FFT-based Hilbert transform (analytic signal),
-// computed at the exact sample count (see bluesteinDFT above) to match
+// computed at the exact sample count (see bluesteinDFT in fft.js) to match
 // scipy.signal.hilbert(data).
 export function computeEnvelopeHilbert(samples, smoothSamples){
   const n = samples.length;

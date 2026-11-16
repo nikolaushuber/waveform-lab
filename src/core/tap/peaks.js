@@ -1,7 +1,5 @@
 import { bluesteinDFT } from '../fft.js';
 
-// Zero-padded FFT magnitude spectrum (same M-real/N-padded convention as
-// computeSpectrumAt above: padding only interpolates, it doesn't add resolution).
 // Exact (unpadded) FFT magnitude spectrum, matching np.fft.rfft(data) bin-
 // for-bin. We used to zero-pad this to interpolate a smoother curve, but
 // that was wrong here: padding reveals extra fine-grained window-sidelobe

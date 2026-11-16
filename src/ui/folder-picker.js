@@ -231,8 +231,7 @@ export const libraryFolderPickerConfig = {
   }
 };
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   loadFromFolderBtnAnalyze.addEventListener('click', () => openFolderPicker(libraryFolderPickerConfig));
   loadFromFolderBtnCompare.addEventListener('click', () => openFolderPicker(libraryFolderPickerConfig));

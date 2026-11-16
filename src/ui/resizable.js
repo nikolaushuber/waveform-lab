@@ -31,8 +31,7 @@ export function makeResizable(handleEl, minPx, maxPx){
   });
 }
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   makeResizable(el('resizeAnalyze'), 200, 640);
   makeResizable(el('resizeCompare'), 260, 720);

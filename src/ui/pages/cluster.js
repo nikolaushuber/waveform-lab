@@ -1,5 +1,6 @@
 import { S } from '../state.js';
-import { detectTapsRF, estimateNoiseSpectrumRF, extractWindowRF, fftFeaturesRF, getBinEdgesRF, trimSignalRF } from '../../core/cluster/features.js';
+import { getBinEdgesRF } from '../../core/cluster/features.js';
+import { extractTapFeatures } from '../../core/cluster/pipeline.js';
 import { rfProximityClustering } from '../../core/ml/forest.js';
 import { kmeansClusterAutoK } from '../../core/ml/kmeans.js';
 import { adjustedRandScore } from '../../core/ml/metrics.js';
@@ -198,63 +199,9 @@ export async function runClusteringJS(){
   const { offsetSec, fmax } = getClusterOffsetFmax();
   const offsetMs = offsetSec * 1000;
 
-  const X = [], meta = [];
-  const warnings = [];
-  let srUsed = null;
-  const sampleRates = new Set();
-
-  for (let fi = 0; fi < activeEntries.length; fi++){
-    const entry = activeEntries[fi];
-    clusterStatus.textContent = `Detecting taps ${fi+1}/${activeEntries.length}: ${entry.name}…`;
-    await sleep0();
-
-    const audioBuffer = entry.audioBuffer;
-    const sr = audioBuffer.sampleRate;
-    sampleRates.add(sr);
-    const nCh = audioBuffer.numberOfChannels;
-    let samples;
-    if (nCh === 1){
-      samples = audioBuffer.getChannelData(0).slice();
-    } else {
-      const n = audioBuffer.length;
-      samples = new Float32Array(n);
-      for (let c = 0; c < nCh; c++){
-        const ch = audioBuffer.getChannelData(c);
-        for (let i = 0; i < n; i++) samples[i] += ch[i]/nCh;
-      }
-    }
-
-    const cropStartVal = (entry.cropStart||'').trim();
-    const cropEndVal = (entry.cropEnd||'').trim();
-    const cropStartSec = cropStartVal !== '' ? Math.max(0, parseFloat(cropStartVal)) : 0;
-    const cropEndSec = cropEndVal !== '' ? Math.max(0, parseFloat(cropEndVal)) : 0;
-    samples = trimSignalRF(samples, sr, isFinite(cropStartSec) ? cropStartSec : 0, isFinite(cropEndSec) ? cropEndSec : 0);
-    await sleep0();
-
-    const onsets = detectTapsRF(samples, sr, { minGapMs });
-    if (!onsets.length){
-      warnings.push(`${entry.name}: no taps detected, skipped`);
-      continue;
-    }
-    await sleep0();
-
-    const noiseSpectrum = estimateNoiseSpectrumRF(samples, sr, onsets, windowMs);
-    if (!noiseSpectrum) warnings.push(`${entry.name}: no quiet gap found, denoising skipped for this file`);
-    await sleep0();
-
-    for (let i = 0; i < onsets.length; i++){
-      const segment = extractWindowRF(samples, sr, onsets[i], windowMs, offsetMs);
-      const feat = fftFeaturesRF(segment, sr, { nBins: CLUSTER_N_BINS, fmin: CLUSTER_FMIN, fmax, noiseSpectrum });
-      X.push(Array.from(feat));
-      meta.push({ file: entry.name, tapIndex: i });
-      if (i % 5 === 4) await sleep0();
-    }
-    if (srUsed === null) srUsed = sr;
-  }
-
-  if (sampleRates.size > 1){
-    warnings.push(`files have different sample rates (${[...sampleRates].join(', ')}) — bin Hz ranges shown assume ${srUsed} Hz`);
-  }
+  const { X, meta, warnings, srUsed } = await extractTapFeatures(activeEntries,
+    { windowMs, minGapMs, offsetMs, fmax, nBins: CLUSTER_N_BINS, fmin: CLUSTER_FMIN },
+    (msg) => { clusterStatus.textContent = msg; });
 
   if (X.length < 6){
     S.clusterRunning = false;
@@ -458,8 +405,7 @@ export function renderClusterResults(res){
       </div>`;
 }
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   clusterEngineSelect.addEventListener('change', () => {
     clusterEngineNote.textContent = CLUSTER_ENGINE_NOTES[clusterEngineSelect.value] || '';

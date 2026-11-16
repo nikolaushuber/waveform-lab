@@ -1,2 +1,2 @@
-// ---------------- Tap Analyser DSP (client-side port of multi_variance.py / tap_scatter.py) ----------------
+// Yields to the event loop, so long analyses keep the page responsive.
 export function sleep0(){ return new Promise(r => setTimeout(r, 0)); }

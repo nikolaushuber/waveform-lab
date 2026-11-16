@@ -1,4 +1,4 @@
-// Deterministic synthetic test signals. Nothing here depends on script.js.
+// Deterministic synthetic test signals. Nothing here depends on src/.
 
 // mulberry32: small, fast, seedable PRNG returning floats in [0, 1).
 export function seededRandom(seed) {

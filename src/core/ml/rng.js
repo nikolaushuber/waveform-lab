@@ -1,4 +1,4 @@
-// ---- ML utilities shared by KMeans + Random Forest below ----
+// ML utilities shared by KMeans and the Random Forest.
 
 // Deterministic, seedable PRNG (mulberry32). Not bit-compatible with numpy's
 // Mersenne Twister — sklearn's exact random_state sequence can't be

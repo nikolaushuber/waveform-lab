@@ -1,41 +1,29 @@
+// Tap Analyser DSP (client-side port of multi_variance.py / tap_scatter.py).
+import { toMono } from '../mono.js';
 import { applyHann } from '../signal.js';
 import { autoDetectSkipStart, detectTapEvents, extractEventWindow } from './detect.js';
 import { computeCommonFrequencies, computeFftMagExact, computeTopPeaksPct } from './peaks.js';
 import { sleep0 } from '../util.js';
 
-// Full per-file pipeline: crop-end trim, crop-start (auto or manual), detect
-// events, FFT + normalise each, cluster into top-5 common frequencies.
-export async function analyseTapFile(entry, opts){
-  const audioBuffer = entry.audioBuffer;
-  const sr = audioBuffer.sampleRate;
-  const nCh = audioBuffer.numberOfChannels;
-  let samples;
-  if (nCh === 1){
-    samples = audioBuffer.getChannelData(0).slice();
-  } else {
-    const n = audioBuffer.length;
-    samples = new Float32Array(n);
-    for (let c = 0; c < nCh; c++){
-      const ch = audioBuffer.getChannelData(c);
-      for (let i = 0; i < n; i++) samples[i] += ch[i]/nCh;
-    }
-  }
-  let durationTotal = samples.length/sr;
-
+// Full per-file pipeline on mono samples: crop-end trim, crop-start (auto or
+// manual), detect events, FFT + normalise each, cluster into the most common
+// frequencies.
+//   crop: { skipStart, skipEnd } — strings as typed in the UI ('' = auto / none)
+//   opts: { numEvents, minGap, minFreq, maxFreq, topNBasis, tolerance, useEnergy }
+export async function analyseTapSamples(samples, sr, crop, opts){
   // Crop End is seconds trimmed off the END of the file (same convention
   // as Clustering's trim_signal), not an absolute timestamp.
-  const skipEndVal = (entry.skipEnd||'').trim();
+  const skipEndVal = (crop.skipEnd||'').trim();
   if (skipEndVal !== ''){
     const skipEndSec = parseFloat(skipEndVal);
     if (isFinite(skipEndSec) && skipEndSec > 0){
       const keepLen = Math.max(1, samples.length - Math.round(skipEndSec*sr));
       samples = samples.subarray(0, keepLen);
-      durationTotal = samples.length/sr;
     }
   }
   await sleep0();
 
-  const skipStartVal = (entry.skipStart||'').trim();
+  const skipStartVal = (crop.skipStart||'').trim();
   const skipStartSec = skipStartVal !== '' ? parseFloat(skipStartVal) : autoDetectSkipStart(samples, sr);
   await sleep0();
 
@@ -67,5 +55,12 @@ export async function analyseTapFile(entry, opts){
   // "Show top" selection, so changing that selector can just re-slice and
   // redraw instantly without re-running the whole analysis.
   const freqSummary = computeCommonFrequencies(eventResults, opts.tolerance, 10);
-  return { label: entry.name, freqSummary, eventCount: eventResults.length, detectedEvents: peakIndices.length };
+  return { freqSummary, eventCount: eventResults.length, detectedEvents: peakIndices.length };
+}
+
+// The same, for a library entry: { name, audioBuffer, skipStart, skipEnd }.
+export async function analyseTapFile(entry, opts){
+  const audioBuffer = entry.audioBuffer;
+  const result = await analyseTapSamples(toMono(audioBuffer), audioBuffer.sampleRate, entry, opts);
+  return { label: entry.name, ...result };
 }

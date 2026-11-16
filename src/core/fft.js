@@ -97,13 +97,6 @@ export function bluesteinDFT(reIn, imIn, inverse){
   return { re: outRe, im: outIm };
 }
 
-// ---------------- Clustering DSP/ML (client-side port of random_forest.py) ----------------
-// Every function below was ported from random_forest.py and cross-checked
-// numerically against the real Python (numpy/scipy/scikit-learn) pipeline
-// before being wired in here — see the standalone validation scripts used
-// during development for the exact diffs. Uses the fftInPlace/ifftInPlace/
-// bluesteinDFT/nextPow2 already defined above.
-
 // rfft magnitude spectrum matching np.fft.rfft(x) magnitude bin-for-bin
 export function rfftMag(signal){
   const n = signal.length;

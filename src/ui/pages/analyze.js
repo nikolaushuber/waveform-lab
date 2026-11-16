@@ -290,8 +290,7 @@ export function renderSheet(entry, capture){
   exportBtn.disabled = false;
 }
 
-// Wiring that ran at load time in the original script.js; main.js calls
-// each module's init() in the original order.
+// Event wiring, run once at startup (main.js calls each module's init()).
 export function init(){
   playBtn.addEventListener('click', () => {
     const entry = S.library.find(f => f.id === S.activeId);

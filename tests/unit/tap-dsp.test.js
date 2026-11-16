@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { applyHann, computeEnvelopeHilbert, smoothMovingAvg } from '../../src/core/signal.js';
 import { findLoudestPeakForward } from '../../src/core/spectrum.js';
-import { analyseTapFile } from '../../src/core/tap/analyse.js';
+import { analyseTapFile, analyseTapSamples } from '../../src/core/tap/analyse.js';
+import { toMono } from '../../src/core/mono.js';
 import { autoDetectSkipStart, detectTapEvents, extractEventWindow } from '../../src/core/tap/detect.js';
 import { sine, tapRecording, fakeAudioBuffer } from '../helpers/signals.js';
 
@@ -95,5 +96,24 @@ describe('analyseTapFile', () => {
     const rec = tapRecording({ sr: SR, onsets: [0.5, 1.5, 2.5, 3.5], duration: 5 });
     const res = await analyseTapFile({ name: 'b.wav', audioBuffer: fakeAudioBuffer(rec, SR), skipStart: '0', skipEnd: '2' }, opts);
     expect(res.detectedEvents).toBe(3);
+  });
+});
+
+describe('toMono / analyseTapSamples', () => {
+  it('toMono averages channels and copies mono input', () => {
+    const a = Float32Array.from([1, 2]), b = Float32Array.from([3, 6]);
+    expect(Array.from(toMono(fakeAudioBuffer([a, b], 10)))).toEqual([2, 4]);
+    const m = toMono(fakeAudioBuffer(a, 10));
+    expect(Array.from(m)).toEqual([1, 2]);
+    expect(m).not.toBe(a);
+  });
+
+  it('analyseTapSamples is analyseTapFile without the AudioBuffer', async () => {
+    const opts = { numEvents: 10, minGap: 0.3, minFreq: 50, maxFreq: 1000, topNBasis: 10, tolerance: 2, useEnergy: false };
+    const rec = tapRecording({ sr: SR, onsets: [0.5, 1.5, 2.5], duration: 3.5 });
+    const crop = { skipStart: '0', skipEnd: '' };
+    const fromSamples = await analyseTapSamples(rec, SR, crop, opts);
+    const fromFile = await analyseTapFile({ name: 'x.wav', audioBuffer: fakeAudioBuffer(rec, SR), ...crop }, opts);
+    expect(fromFile).toEqual({ label: 'x.wav', ...fromSamples });
   });
 });
