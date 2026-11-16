@@ -255,7 +255,7 @@
           <input type="file" id="fileInputTap" accept=".wav,audio/wav,audio/x-wav" multiple>
         </label>
         <button class="folder-load-btn" type="button" id="loadFromFolderBtnTap">Load from local folder</button>
-        <div class="empty-note" style="margin-bottom:10px;">Leave Crop Start blank to auto-detect the end of any leading speech. Crop End trims that many seconds off the end of the file (use it to cut trailing noise).</div>
+        <div class="empty-note" style="margin-bottom:10px;">Click a recording to view, play and edit its crop and taps in the Recording panel. A blank Crop Start auto-detects the end of any leading speech.</div>
         <div class="tap-rows" id="tapRows">
           <div class="empty-note">No files yet.</div>
         </div>
@@ -292,6 +292,55 @@
 
     <!-- RIGHT: RESULTS -->
     <div>
+      <div class="panel" id="tapEditorPanel">
+        <div class="panel-label">
+          <span>Recording</span>
+          <span class="te-actions">
+            <button class="text-btn" type="button" id="tapEditorResetCrop">Reset crop</button>
+            <button class="text-btn" type="button" id="tapEditorResetTaps">Reset taps</button>
+          </span>
+        </div>
+        <div class="axis-bar" style="margin-top:0;">
+          <div class="axis-group">
+            <span class="axis-label">File</span>
+            <select id="tapEditorSelect" class="smoothing-select"></select>
+          </div>
+          <div class="axis-group">
+            <span class="axis-label">Crop start</span>
+            <input type="number" id="tapCropStart" class="freq-min-input" min="0" step="0.1" placeholder="auto" title="Seconds cut off the start. Leave blank to auto-detect the end of any leading speech.">
+            <span>s</span>
+          </div>
+          <div class="axis-group">
+            <span class="axis-label">Crop end</span>
+            <input type="number" id="tapCropEnd" class="freq-min-input" min="0" step="0.1" placeholder="none" title="Seconds cut off the end (e.g. trailing noise). Blank = none.">
+            <span>s</span>
+          </div>
+          <div class="axis-group">
+            <span class="axis-label">Window start</span>
+            <input type="number" id="tapWindowOffset" class="freq-min-input" value="0.1" min="-1" max="2" step="0.01" title="Where each tap's 1 s analysis window starts, in seconds after the tap. Negative values start it before the attack, so the window encloses the tap. Applies to all files.">
+            <span>s</span>
+            <span class="te-unit">after tap · all files</span>
+          </div>
+        </div>
+        <div class="transport te-transport">
+          <button class="ctrl" id="tapPlayBtn" disabled title="Play / Pause">&#9658;</button>
+          <div class="time-readout"><b id="tapCurTime">0:00.000</b> / <span id="tapDurTime">0:00.000</span></div>
+          <span class="te-summary" id="tapEditorSummary">Load a recording on the left.</span>
+        </div>
+        <div class="screen">
+          <canvas id="tapEditorCanvas" width="1200" height="180"></canvas>
+        </div>
+        <canvas id="tapEditorOverview" width="1200" height="34"></canvas>
+        <div class="te-zoom">
+          <button class="text-btn" type="button" id="tapZoomOut" title="Zoom out">&minus;</button>
+          <button class="text-btn" type="button" id="tapZoomIn" title="Zoom in">+</button>
+          <button class="text-btn" type="button" id="tapZoomFit" title="Show the whole recording">Fit</button>
+          <button class="text-btn" type="button" id="tapZoomCrop" title="Zoom to the cropped range">Zoom to crop</button>
+          <span class="te-zoom-label" id="tapZoomLabel"></span>
+        </div>
+        <div class="te-hint">Ctrl/⌘ + scroll or pinch to zoom · scroll sideways or Shift + scroll to pan · drag the strip below the recording to move around · click to move the playhead · drag the red edges to crop. Each tap is a block covering its attack (amber line) and its 1 s analysis window, numbered in analysis order; a lighter start of the bar is the part skipped between the attack and the window (set by Window start). Drag a tap by its bar or line — it snaps onto a nearby attack if there is one (the line turns solid) · double-click to add one · right-click to remove · hold Alt to place a tap exactly without snapping.</div>
+      </div>
+
       <div class="panel">
         <div class="panel-label"><span>Frequency Scatter <span class="freq-range-label" id="tapFreqRangeLabel" style="color:var(--text-faint);">(top 5 most common frequencies per file, average % vs. Hz)</span></span></div>
         <div class="axis-bar" style="margin-top:0;">

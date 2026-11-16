@@ -2,9 +2,8 @@ import { S } from '../state.js';
 import { toMono } from '../../core/mono.js';
 import { callPython, waitForPython } from '../../engines/python.js';
 import { dropzoneTap, el, fileInputTap, runTapBtn, scatterCanvas, scatterLegend, scatterTooltip, tapFileCount, tapFreqRangeLabel, tapMetricNote, tapMetricSelect, tapResultsBody, tapRows, tapStatus, tapTopNSelect } from '../dom.js';
-import { syncEntryToFolder } from '../folder-store.js';
 import { sortByName, uid } from '../format.js';
-import { drawWaveformOverview } from '../views/waveform.js';
+import { refreshTapEditor, requestDetection, selectTapEntry, tapRowSummary, tapsForAnalysis, windowOffset } from './tap-recording.js';
 export const TAP_METRIC_NOTES = {
   magnitude: 'Peaks are found and normalised by linear FFT magnitude — the original behaviour.',
   energy: 'Peaks are ranked by normalised energy (energy ÷ −3dB bandwidth) — rewards sharp, well-defined resonances over broad, diffuse ones of equal energy (multi_energy.py).',
@@ -28,7 +27,7 @@ export function addTapFiles(fileArr){
         const audioBuffer = await tmpCtx.decodeAudioData(arrayBuffer.slice(0));
         const entry = {
           id: uid(), name: file.name, size: file.size, audioBuffer,
-          skipStart:'', skipEnd:'', included:true,
+          skipStart:'', skipEnd:'', taps:null, included:true,
           _rawBuffer: arrayBuffer.slice(0)
         };
         S.tapLibrary.push(entry);
@@ -44,20 +43,6 @@ export function addTapFiles(fileArr){
   });
 }
 
-export function drawTapRowWave(canvas, entry){
-  drawWaveformOverview(canvas, entry.audioBuffer);
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  const dur = entry.audioBuffer.duration || 1;
-  const ss = parseFloat(entry.skipStart);
-  const se = parseFloat(entry.skipEnd);
-  ctx.fillStyle = 'rgba(194,59,46,0.16)';
-  if (isFinite(ss) && ss > 0) ctx.fillRect(0, 0, Math.min(w, (ss/dur)*w), h);
-  if (isFinite(se) && se > 0){
-    const seStart = Math.max(0, dur-se);
-    ctx.fillRect(Math.max(0,(seStart/dur)*w), 0, w - Math.max(0,(seStart/dur)*w), h);
-  }
-}
 
 export function renderTapRows(){
   const selectedCount = S.tapLibrary.filter(e => e.included !== false).length;
@@ -66,13 +51,22 @@ export function renderTapRows(){
     : '0 loaded';
   if (!S.tapLibrary.length){
     tapRows.innerHTML = '<div class="empty-note">No files yet.</div>';
+    refreshTapEditor();
     return;
   }
+  if (!S.tapLibrary.some(e => e.id === S.tapSelectedId)) S.tapSelectedId = S.tapLibrary[0].id;
+  const scrollTop = tapRows.scrollTop;
   tapRows.innerHTML = '';
   S.tapLibrary.forEach(entry => {
     if (entry.included === undefined) entry.included = true;
+    if (entry.taps === undefined) entry.taps = null;
+    if (!entry.detection && !entry._detecting) requestDetection(entry, 0);
     const row = document.createElement('div');
-    row.className = 'tap-row' + (entry.included ? '' : ' excluded');
+    row.className = 'tap-row' + (entry.included ? '' : ' excluded') + (entry.id === S.tapSelectedId ? ' selected' : '');
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('input, button, label') || entry.id === S.tapSelectedId) return;
+      selectTapEntry(entry.id);
+    });
 
     const head = document.createElement('div');
     head.className = 'tr-head';
@@ -99,48 +93,25 @@ export function renderTapRows(){
     removeBtn.title = 'Remove this file';
     removeBtn.addEventListener('click', () => {
       S.tapLibrary = S.tapLibrary.filter(f => f.id !== entry.id);
+      if (S.tapSelectedId === entry.id) S.tapSelectedId = null;
       renderTapRows();
     });
     head.appendChild(includeWrap);
     head.appendChild(nameEl);
     head.appendChild(removeBtn);
 
-    const canvas = document.createElement('canvas');
-    canvas.className = 'tr-wave';
-    canvas.width = 1200; canvas.height = 70;
-
-    const fields = document.createElement('div');
-    fields.className = 'tr-fields';
-
-    const ssField = document.createElement('div');
-    ssField.className = 'tap-field';
-    ssField.innerHTML = '<label>Crop Start (s)</label>';
-    const ssInput = document.createElement('input');
-    ssInput.type = 'number'; ssInput.min = '0'; ssInput.step = '0.1'; ssInput.placeholder = 'auto';
-    ssInput.value = entry.skipStart;
-    ssInput.addEventListener('change', () => { entry.skipStart = ssInput.value; drawTapRowWave(canvas, entry); syncEntryToFolder(entry, 'skipStart', 'skipEnd'); });
-    ssField.appendChild(ssInput);
-
-    const seField = document.createElement('div');
-    seField.className = 'tap-field';
-    seField.innerHTML = '<label>Crop End (s)</label>';
-    const seInput = document.createElement('input');
-    seInput.type = 'number'; seInput.min = '0'; seInput.step = '0.1'; seInput.placeholder = 'none';
-    seInput.value = entry.skipEnd;
-    seInput.addEventListener('change', () => { entry.skipEnd = seInput.value; drawTapRowWave(canvas, entry); syncEntryToFolder(entry, 'skipStart', 'skipEnd'); });
-    seField.appendChild(seInput);
-
-    fields.appendChild(ssField);
-    fields.appendChild(seField);
+    const meta = document.createElement('div');
+    meta.className = 'tr-meta';
+    meta.textContent = tapRowSummary(entry);
 
     row.appendChild(head);
-    row.appendChild(canvas);
-    row.appendChild(fields);
+    row.appendChild(meta);
     tapRows.appendChild(row);
-
-    drawTapRowWave(canvas, entry);
   });
+  tapRows.scrollTop = scrollTop;
+  refreshTapEditor();
 }
+
 
 export async function runTapAnalysis(){
   if (tapRunning) return;
@@ -167,6 +138,7 @@ export async function runTapAnalysis(){
     topNBasis:  parseInt(el('advTopNBasis').value, 10) || 10,
     tolerance:  parseFloat(el('advTolerance').value) || 2,
     useEnergy:  el('tapMetric').value === 'energy',
+    windowOffset: windowOffset(),
   };
 
   try{
@@ -188,7 +160,7 @@ export async function runTapAnalysis(){
     try{
       const { audioBuffer } = entry;
       const res = await callPython('run_tap_analysis',
-        { sr: audioBuffer.sampleRate, skipStart: entry.skipStart || '', skipEnd: entry.skipEnd || '', opts },
+        { sr: audioBuffer.sampleRate, skipStart: entry.skipStart || '', skipEnd: entry.skipEnd || '', opts, ...tapsForAnalysis(entry) },
         [toMono(audioBuffer)]);
       if (res.error) errors.push(`${entry.name} (${res.error})`);
       else fileSummaries.push({ label: entry.name, ...res });

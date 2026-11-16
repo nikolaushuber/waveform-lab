@@ -240,7 +240,8 @@ export function init(){
     getTarget: () => S.tapLibrary,
     buildEntry: (rec) => ({
       id: rec.id, name: rec.name, size: rec.size, audioBuffer: rec.audioBuffer,
-      skipStart: rec.skipStart || '', skipEnd: rec.skipEnd || '', included: true,
+      skipStart: rec.skipStart || '', skipEnd: rec.skipEnd || '',
+      taps: rec.taps ? [...rec.taps] : null, included: true,
       _rawBuffer: rec._rawBuffer, _folderSynced: true
     }),
     onAdded: () => renderTapRows()

@@ -22,6 +22,7 @@ export const S = {
   pendingPreviewEntry: null,
   pendingPreviewTime: null,
   lastPreviewCapture: null,
+  tapSelectedId: null, // file shown in the Tap Analyser's recording editor
   tapLibrary: [], // {id, name, size, audioBuffer, skipStart:'', skipEnd:'', included, _rawBuffer}
   clusterLibrary: [], // {id, name, size, audioBuffer, cropStart:'', cropEnd:'', included, _rawBuffer}
   clusterRunning: false,

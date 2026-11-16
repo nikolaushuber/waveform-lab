@@ -9,6 +9,7 @@ export function persistFolderEntry(entry){
   idbPut('fileFolder', {
     id: entry.id, name: entry.name, size: entry.size,
     skipStart: entry.skipStart, skipEnd: entry.skipEnd,
+    taps: entry.taps || null, // hand-edited tap times (s) from the Tap Analyser, or null
     folderId: entry.folderId || null,
     arrayBuffer: entry._rawBuffer
   });
@@ -22,8 +23,9 @@ export function persistFolderGroup(group){
 }
 
 // When a Tap Analyser / Clustering row that was loaded from the shared
-// folder (entry._folderSynced) has its skip/crop times edited, mirror
-// those times back onto the matching folder entry and save them — so the
+// folder (entry._folderSynced) has its skip/crop times (or, in the Tap
+// Analyser, its taps) edited, mirror them back onto the matching folder
+// entry and save them — so the
 // folder always reflects the latest times, wherever they were last set.
 // Files picked ad hoc from your computer (no matching folder entry) are
 // left alone; nothing gets persisted for them.
@@ -33,5 +35,6 @@ export function syncEntryToFolder(entry, startField, endField){
   if (!rec) return;
   rec.skipStart = entry[startField];
   rec.skipEnd = entry[endField];
+  if ('taps' in entry) rec.taps = entry.taps ? [...entry.taps] : null;
   persistFolderEntry(rec);
 }

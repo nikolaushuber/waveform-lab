@@ -19,14 +19,32 @@ def _array(x):
     return np.asarray(x, dtype=np.float32)
 
 
+def run_tap_detection(payload_json, sample_arrays):
+    """payload: {sr, skipStart, skipEnd, opts: {numEvents, minGap}} ->
+    {cropStart, cropStartAuto, cropEnd, taps} (seconds)."""
+    p = json.loads(payload_json)
+    crop = {"skipStart": p.get("skipStart", ""), "skipEnd": p.get("skipEnd", "")}
+    try:
+        result = tap.detect(_array(sample_arrays[0]), p["sr"], crop, p["opts"])
+    except tap.TapAnalysisError as e:
+        result = {"error": str(e)}
+    return json.dumps(result)
+
+
 def run_tap_analysis(payload_json, sample_arrays):
     """payload: {sr, skipStart, skipEnd, opts: {numEvents, minGap, minFreq,
-    maxFreq, topNBasis, tolerance, useEnergy}}; sample_arrays: [mono Float32Array]"""
+    maxFreq, topNBasis, tolerance, useEnergy}} plus optionally
+    {taps, cropStart, cropEnd} (seconds) to analyse exactly those taps
+    instead of detecting them; sample_arrays: [mono Float32Array]"""
     p = json.loads(payload_json)
+    samples = _array(sample_arrays[0])
     try:
-        result = tap.analyse_tap_samples(_array(sample_arrays[0]), p["sr"],
-                                         {"skipStart": p.get("skipStart", ""), "skipEnd": p.get("skipEnd", "")},
-                                         p["opts"])
+        if p.get("taps") is not None:
+            result = tap.analyse_taps(samples, p["sr"], p["taps"], p["opts"],
+                                      p.get("cropStart") or 0.0, p.get("cropEnd") or 0.0)
+        else:
+            crop = {"skipStart": p.get("skipStart", ""), "skipEnd": p.get("skipEnd", "")}
+            result = tap.analyse_tap_samples(samples, p["sr"], crop, p["opts"])
     except tap.TapAnalysisError as e:
         result = {"error": str(e)}
     return json.dumps(result)
