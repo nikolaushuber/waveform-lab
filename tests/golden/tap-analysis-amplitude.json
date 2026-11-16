@@ -1,0 +1,470 @@
+{
+ "a1.wav": {
+  "label": "a1.wav",
+  "freqSummary": [
+   {
+    "freq": 196.065354,
+    "appearances": 4,
+    "avgPct": 31.3919349,
+    "stdHz": 0.269513033,
+    "stdPct": 10.4350202,
+    "minPct": 14.0507395,
+    "maxPct": 41.461183,
+    "minHz": 195.816304,
+    "maxHz": 196.505754
+   },
+   {
+    "freq": 522.758824,
+    "appearances": 3,
+    "avgPct": 18.5061134,
+    "stdHz": 0.252629236,
+    "stdPct": 1.63224566,
+    "minPct": 16.5508404,
+    "maxPct": 20.5463032,
+    "minHz": 522.57421,
+    "maxHz": 523.116028
+   },
+   {
+    "freq": 880.373222,
+    "appearances": 3,
+    "avgPct": 7.56284124,
+    "stdHz": 0.246452371,
+    "stdPct": 0.693720648,
+    "minPct": 6.7042727,
+    "maxPct": 8.40324295,
+    "minHz": 880.092592,
+    "maxHz": 880.692543
+   },
+   {
+    "freq": 157.751443,
+    "appearances": 3,
+    "avgPct": 7.09521248,
+    "stdHz": 0.598695963,
+    "stdPct": 1.33234541,
+    "minPct": 5.82991232,
+    "maxPct": 8.93698541,
+    "minHz": 157.224292,
+    "maxHz": 158.588813
+   },
+   {
+    "freq": 143.090919,
+    "appearances": 3,
+    "avgPct": 6.41170973,
+    "stdHz": 0.8114087,
+    "stdPct": 2.05138773,
+    "minPct": 4.89126774,
+    "maxPct": 9.31166892,
+    "minHz": 142.216283,
+    "maxHz": 144.171537
+   },
+   {
+    "freq": 151.672409,
+    "appearances": 2,
+    "avgPct": 5.57263238,
+    "stdHz": 0.489386987,
+    "stdPct": 0.361297794,
+    "minPct": 5.21133459,
+    "maxPct": 5.93393017,
+    "minHz": 151.183022,
+    "maxHz": 152.161796
+   },
+   {
+    "freq": 226.779414,
+    "appearances": 2,
+    "avgPct": 5.48919974,
+    "stdHz": 0.862680858,
+    "stdPct": 0.111131777,
+    "minPct": 5.37806797,
+    "maxPct": 5.60033152,
+    "minHz": 225.916734,
+    "maxHz": 227.642095
+   },
+   {
+    "freq": 139.111794,
+    "appearances": 2,
+    "avgPct": 4.73302481,
+    "stdHz": 0.0455810195,
+    "stdPct": 0.0978800893,
+    "minPct": 4.63514472,
+    "maxPct": 4.8309049,
+    "minHz": 139.066213,
+    "maxHz": 139.157375
+   },
+   {
+    "freq": 131.076548,
+    "appearances": 2,
+    "avgPct": 4.31465432,
+    "stdHz": 0.877048894,
+    "stdPct": 0.141967561,
+    "minPct": 4.17268676,
+    "maxPct": 4.45662188,
+    "minHz": 130.199499,
+    "maxHz": 131.953596
+   },
+   {
+    "freq": 936.354394,
+    "appearances": 1,
+    "avgPct": 10.8369831,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 10.8369831,
+    "maxPct": 10.8369831,
+    "minHz": 936.354394,
+    "maxHz": 936.354394
+   }
+  ],
+  "eventCount": 4,
+  "detectedEvents": 4
+ },
+ "a2.wav": {
+  "label": "a2.wav",
+  "freqSummary": [
+   {
+    "freq": 195.904634,
+    "appearances": 2,
+    "avgPct": 38.0859004,
+    "stdHz": 0.0494315251,
+    "stdPct": 6.43997442,
+    "minPct": 31.645926,
+    "maxPct": 44.5258749,
+    "minHz": 195.855202,
+    "maxHz": 195.954065
+   },
+   {
+    "freq": 523.016607,
+    "appearances": 2,
+    "avgPct": 20.2265762,
+    "stdHz": 0.263148571,
+    "stdPct": 1.64875415,
+    "minPct": 18.577822,
+    "maxPct": 21.8753303,
+    "minHz": 522.753459,
+    "maxHz": 523.279756
+   },
+   {
+    "freq": 880.215647,
+    "appearances": 2,
+    "avgPct": 8.70049379,
+    "stdHz": 0.119226069,
+    "stdPct": 0.26991486,
+    "minPct": 8.43057893,
+    "maxPct": 8.97040865,
+    "minHz": 880.09642,
+    "maxHz": 880.334873
+   },
+   {
+    "freq": 525.247432,
+    "appearances": 1,
+    "avgPct": 8.62744454,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 8.62744454,
+    "maxPct": 8.62744454,
+    "minHz": 525.247432,
+    "maxHz": 525.247432
+   },
+   {
+    "freq": 733.873361,
+    "appearances": 1,
+    "avgPct": 5.98601173,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 5.98601173,
+    "maxPct": 5.98601173,
+    "minHz": 733.873361,
+    "maxHz": 733.873361
+   },
+   {
+    "freq": 189.286976,
+    "appearances": 1,
+    "avgPct": 5.64214284,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 5.64214284,
+    "maxPct": 5.64214284,
+    "minHz": 189.286976,
+    "maxHz": 189.286976
+   },
+   {
+    "freq": 473.08243,
+    "appearances": 1,
+    "avgPct": 5.5090208,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 5.5090208,
+    "maxPct": 5.5090208,
+    "minHz": 473.08243,
+    "maxHz": 473.08243
+   },
+   {
+    "freq": 483.060698,
+    "appearances": 1,
+    "avgPct": 5.43176365,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 5.43176365,
+    "maxPct": 5.43176365,
+    "minHz": 483.060698,
+    "maxHz": 483.060698
+   },
+   {
+    "freq": 204.461537,
+    "appearances": 1,
+    "avgPct": 5.2064674,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 5.2064674,
+    "maxPct": 5.2064674,
+    "minHz": 204.461537,
+    "maxHz": 204.461537
+   },
+   {
+    "freq": 798.856801,
+    "appearances": 1,
+    "avgPct": 4.94282204,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 4.94282204,
+    "maxPct": 4.94282204,
+    "minHz": 798.856801,
+    "maxHz": 798.856801
+   }
+  ],
+  "eventCount": 2,
+  "detectedEvents": 2
+ },
+ "b1.wav": {
+  "label": "b1.wav",
+  "freqSummary": [
+   {
+    "freq": 310.846325,
+    "appearances": 3,
+    "avgPct": 32.1193474,
+    "stdHz": 0.0263645701,
+    "stdPct": 11.4756972,
+    "minPct": 16.3627317,
+    "maxPct": 43.3642907,
+    "minHz": 310.819027,
+    "maxHz": 310.881968
+   },
+   {
+    "freq": 740.23304,
+    "appearances": 3,
+    "avgPct": 19.5592897,
+    "stdHz": 0.289316621,
+    "stdPct": 6.49956644,
+    "minPct": 10.6628107,
+    "maxPct": 26.009039,
+    "minHz": 740.023454,
+    "maxHz": 740.642154
+   },
+   {
+    "freq": 781.370605,
+    "appearances": 2,
+    "avgPct": 6.18549939,
+    "stdHz": 0.240012569,
+    "stdPct": 2.92323144,
+    "minPct": 3.26226795,
+    "maxPct": 9.10873083,
+    "minHz": 781.130592,
+    "maxHz": 781.610617
+   },
+   {
+    "freq": 774.013404,
+    "appearances": 1,
+    "avgPct": 11.0408478,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 11.0408478,
+    "maxPct": 11.0408478,
+    "minHz": 774.013404,
+    "maxHz": 774.013404
+   },
+   {
+    "freq": 314.311326,
+    "appearances": 1,
+    "avgPct": 9.47304004,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 9.47304004,
+    "maxPct": 9.47304004,
+    "minHz": 314.311326,
+    "maxHz": 314.311326
+   },
+   {
+    "freq": 899.075405,
+    "appearances": 1,
+    "avgPct": 9.10011076,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 9.10011076,
+    "maxPct": 9.10011076,
+    "minHz": 899.075405,
+    "maxHz": 899.075405
+   },
+   {
+    "freq": 679.402245,
+    "appearances": 1,
+    "avgPct": 8.7250576,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 8.7250576,
+    "maxPct": 8.7250576,
+    "minHz": 679.402245,
+    "maxHz": 679.402245
+   },
+   {
+    "freq": 171.555644,
+    "appearances": 1,
+    "avgPct": 8.60402973,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 8.60402973,
+    "maxPct": 8.60402973,
+    "minHz": 171.555644,
+    "maxHz": 171.555644
+   },
+   {
+    "freq": 64.9839149,
+    "appearances": 1,
+    "avgPct": 8.56698459,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 8.56698459,
+    "maxPct": 8.56698459,
+    "minHz": 64.9839149,
+    "maxHz": 64.9839149
+   },
+   {
+    "freq": 600.288159,
+    "appearances": 1,
+    "avgPct": 8.35565629,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 8.35565629,
+    "maxPct": 8.35565629,
+    "minHz": 600.288159,
+    "maxHz": 600.288159
+   }
+  ],
+  "eventCount": 3,
+  "detectedEvents": 3
+ },
+ "b2.wav": {
+  "label": "b2.wav",
+  "freqSummary": [
+   {
+    "freq": 310.836656,
+    "appearances": 1,
+    "avgPct": 40.8966196,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 40.8966196,
+    "maxPct": 40.8966196,
+    "minHz": 310.836656,
+    "maxHz": 310.836656
+   },
+   {
+    "freq": 740.155979,
+    "appearances": 1,
+    "avgPct": 24.6126246,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 24.6126246,
+    "maxPct": 24.6126246,
+    "minHz": 740.155979,
+    "maxHz": 740.155979
+   },
+   {
+    "freq": 574.935926,
+    "appearances": 1,
+    "avgPct": 11.184569,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 11.184569,
+    "maxPct": 11.184569,
+    "minHz": 574.935926,
+    "maxHz": 574.935926
+   },
+   {
+    "freq": 352.531342,
+    "appearances": 1,
+    "avgPct": 10.7893479,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 10.7893479,
+    "maxPct": 10.7893479,
+    "minHz": 352.531342,
+    "maxHz": 352.531342
+   },
+   {
+    "freq": 387.631636,
+    "appearances": 1,
+    "avgPct": 10.4875835,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 10.4875835,
+    "maxPct": 10.4875835,
+    "minHz": 387.631636,
+    "maxHz": 387.631636
+   },
+   {
+    "freq": 412.041293,
+    "appearances": 1,
+    "avgPct": 10.4087346,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 10.4087346,
+    "maxPct": 10.4087346,
+    "minHz": 412.041293,
+    "maxHz": 412.041293
+   },
+   {
+    "freq": 817.202752,
+    "appearances": 1,
+    "avgPct": 10.1713874,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 10.1713874,
+    "maxPct": 10.1713874,
+    "minHz": 817.202752,
+    "maxHz": 817.202752
+   },
+   {
+    "freq": 643.687488,
+    "appearances": 1,
+    "avgPct": 9.94005003,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 9.94005003,
+    "maxPct": 9.94005003,
+    "minHz": 643.687488,
+    "maxHz": 643.687488
+   },
+   {
+    "freq": 288.590453,
+    "appearances": 1,
+    "avgPct": 9.55396348,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 9.55396348,
+    "maxPct": 9.55396348,
+    "minHz": 288.590453,
+    "maxHz": 288.590453
+   },
+   {
+    "freq": 590.853414,
+    "appearances": 1,
+    "avgPct": 9.53301508,
+    "stdHz": 0,
+    "stdPct": 0,
+    "minPct": 9.53301508,
+    "maxPct": 9.53301508,
+    "minHz": 590.853414,
+    "maxHz": 590.853414
+   }
+  ],
+  "eventCount": 2,
+  "detectedEvents": 2
+ }
+}
