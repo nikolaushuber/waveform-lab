@@ -235,6 +235,37 @@ test('tap editor: taps are blocks with header bars in lanes', async ({ page }) =
   expect(errors).toEqual([]);
 });
 
+test('tap editor: dragged taps snap to a nearby attack, and stay put elsewhere', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors = await openApp(page);
+  await gotoTab(page, 'tap');
+  await page.locator('#fileInputTap').setInputFiles(wavFile('a1.wav', A1.samples));
+  await waitDetected(page);
+  const ed = await editor(page);
+  const taps = async () => (await ed.canvas.getAttribute('data-taps')).split(',').map(Number);
+  const [t1, t2, t3] = await taps(); // ~1.4, 2.3, 3.1 (4.0 is the 4th)
+
+  // Remove the tap at ~3.1 s, then drag the ~2.3 s tap by its attack line
+  // to 30 ms past the 3.1 s attack: it snaps exactly onto that attack.
+  await page.mouse.click(ed.at(t3).x, ed.at(t3, 0.6).y, { button: 'right' });
+  await expect.poll(async () => (await taps()).length).toBe(3);
+  const drag = async (from, to) => {
+    await page.mouse.move(ed.at(from).x, ed.at(from, 0.6).y);
+    await page.mouse.down();
+    await page.mouse.move(ed.at(to).x, ed.at(to, 0.6).y, { steps: 8 });
+    await page.mouse.up();
+  };
+  await drag(t2, t3 + 0.03);
+  await expect.poll(async () => (await taps())[1]).toBeCloseTo(t3, 3);
+
+  // Dragged into a quiet stretch it lands exactly where it was dropped.
+  await drag(t3, 4.6);
+  await expect.poll(async () => Math.min(...(await taps()).map((x) => Math.abs(x - 4.6)))).toBeLessThan(0.02);
+  expect((await taps()).some((x) => Math.abs(x - t3) < 1e-3)).toBe(false); // moved away from 3.1
+  expect((await taps())[0]).toBeCloseTo(t1, 3);
+  expect(errors).toEqual([]);
+});
+
 test('tap editor: hand-edited taps are saved with File Folder files', async ({ page }) => {
   test.setTimeout(150_000);
   const errors = await openApp(page);

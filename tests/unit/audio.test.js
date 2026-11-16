@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { toMono } from '../../src/core/mono.js';
-import { applyHann, findLoudestPeakForward, snapToAttack } from '../../src/core/spectrum.js';
-import { fakeAudioBuffer } from '../helpers/signals.js';
+import { applyHann, findAttackNear, findLoudestPeakForward } from '../../src/core/spectrum.js';
+import { fakeAudioBuffer, tapRecording } from '../helpers/signals.js';
 
 describe('toMono', () => {
   it('averages channels and copies mono input', () => {
@@ -29,25 +29,27 @@ describe('findLoudestPeakForward', () => {
   });
 });
 
-describe('snapToAttack', () => {
-  const sr = 1000;
-  const a = new Float32Array(1000);
-  a[500] = 0.9; a[470] = 0.5; a[540] = -0.95;
+describe('findAttackNear', () => {
+  const SR = 8000;
+  const rec = tapRecording({ sr: SR, duration: 2, onsets: [0.5, 1.2] }); // noise 0.002, taps peak ~0.6
+  const buf = fakeAudioBuffer(rec, SR);
 
-  it('moves to the loudest sample from 10 ms before to 30 ms after', () => {
-    expect(snapToAttack(fakeAudioBuffer(a, sr), 0.505)).toBeCloseTo(0.5, 12);  // 495..534 -> 500
-    expect(snapToAttack(fakeAudioBuffer(a, sr), 0.515)).toBeCloseTo(0.54, 12); // 505..544 -> 540 (|-0.95|)
+  it('finds the attack within the radius', () => {
+    const t = findAttackNear(buf, 0.53, 0.05);
+    expect(t).not.toBeNull();
+    expect(Math.abs(t - 0.5)).toBeLessThan(0.005);
+    expect(Math.abs(findAttackNear(buf, 1.17, 0.05) - 1.2)).toBeLessThan(0.005);
   });
 
-  it('stays put in silence and clamps at the file edges', () => {
-    expect(snapToAttack(fakeAudioBuffer(new Float32Array(100), sr), 0.05)).toBeCloseTo(0.04, 12); // first of equal maxima
-    expect(snapToAttack(fakeAudioBuffer(a, sr), -1)).toBeGreaterThanOrEqual(0);
-    expect(snapToAttack(fakeAudioBuffer(a, sr), 5)).toBeLessThan(1);
+  it('returns null for background noise, silence, or an attack outside the radius', () => {
+    expect(findAttackNear(buf, 0.25, 0.05)).toBeNull();                       // noise only
+    expect(findAttackNear(buf, 0.40, 0.05)).toBeNull();                       // tap at 0.5 is 0.1 s away
+    expect(findAttackNear(fakeAudioBuffer(new Float32Array(SR), SR), 0.5, 0.05)).toBeNull();
   });
 
-  it('downmixes channels', () => {
-    const l = new Float32Array(100), r = new Float32Array(100);
-    l[20] = 1; r[20] = -1; l[25] = 0.4; r[25] = 0.4;
-    expect(snapToAttack(fakeAudioBuffer([l, r], sr), 0.02)).toBeCloseTo(0.025, 12);
+  it('downmixes channels (opposite-phase samples cancel)', () => {
+    const l = new Float32Array(1000), r = new Float32Array(1000);
+    l[500] = 1; r[500] = -1; l[510] = 0.5; r[510] = 0.5;
+    expect(findAttackNear(fakeAudioBuffer([l, r], 1000), 0.5, 0.02)).toBeCloseTo(0.51, 12);
   });
 });

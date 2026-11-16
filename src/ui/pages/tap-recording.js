@@ -8,7 +8,7 @@
 //   detection            last run_tap_detection result {cropStart, cropStartAuto, cropEnd, taps} or {error}
 import { S } from '../state.js';
 import { toMono } from '../../core/mono.js';
-import { snapToAttack } from '../../core/spectrum.js';
+import { findAttackNear } from '../../core/spectrum.js';
 import { callPython } from '../../engines/python.js';
 import { createPlayer } from '../../platform/audio-player.js';
 import { el } from '../dom.js';
@@ -217,9 +217,9 @@ export function init(){
       entry.taps = taps;
       changed(entry, false);
     },
-    snap: (t) => {
+    snap: (t, radius) => {
       const entry = selectedTapEntry();
-      return entry ? snapToAttack(entry.audioBuffer, t) : t;
+      return entry ? findAttackNear(entry.audioBuffer, t, radius) : null;
     },
   });
 

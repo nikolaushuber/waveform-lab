@@ -11,7 +11,8 @@ import { drawWaveformOverview, drawWaveformRange } from './waveform.js';
 //          (all times in seconds; cropEnd = seconds cut off the end)
 //   onCropChange({ cropStart } | { cropEnd })   after a crop edge is dropped
 //   onTapsChange(taps)                          after a tap is moved, added or removed
-//   snap(timeSec) -> timeSec                    where a dropped tap should land (Alt skips it)
+//   snap(timeSec, radiusSec) -> timeSec | null  a tap attack near timeSec, if there is one
+//                                               (used while dragging and when adding; Alt skips it)
 //   onSeek(timeSec)                             a click on empty space (moves the playhead)
 //   onZoom({ start, end, duration })            the visible window changed
 //
@@ -28,6 +29,9 @@ const MIN_SPAN = 0.005;  // seconds — deepest zoom
 // window, with a numbered header bar at the top (the handle). Blocks whose
 // windows overlap go into separate lanes.
 const LANE_TOP = 4, LANE_H = 16, LANE_GAP = 2, MAX_LANES = 6;
+// A dragged or added tap snaps to an attack within this many CSS pixels
+// (kept between 5 and 150 ms whatever the zoom).
+const SNAP_PX = 12, SNAP_MIN = 0.005, SNAP_MAX = 0.15;
 
 const COLORS = {
   crop: 'rgba(194,59,46,0.16)',
@@ -74,6 +78,11 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     const gain = peak > 0 ? Math.min(50, 1 / peak) : 1;
     scale = { audioBuffer: view.audioBuffer, from, to, gain };
     return gain;
+  }
+
+  function snapRadius(){
+    const perCssPx = (span() / canvas.width) * scaleOf(canvas);
+    return Math.min(SNAP_MAX, Math.max(SNAP_MIN, SNAP_PX * perCssPx));
   }
 
   function setWindow(next){
@@ -199,7 +208,9 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
       ctx.fillRect(xg, r.y1, r.x1 - xg, h - r.y1);
       // Attack line — translucent, because taps snap to their loudest
       // sample and a solid line would hide exactly the peak of the spike.
-      ctx.fillStyle = on ? (active ? 'rgba(181,105,10,0.75)' : 'rgba(181,105,10,0.4)') : 'rgba(150,150,145,0.4)';
+      // While dragging, a solid line shows the tap has snapped onto an attack.
+      const snapped = drag && drag.kind === 'tap' && drag.index === i && drag.snapped;
+      ctx.fillStyle = snapped ? COLORS.tap : on ? (active ? 'rgba(181,105,10,0.75)' : 'rgba(181,105,10,0.4)') : 'rgba(150,150,145,0.4)';
       ctx.fillRect(r.x0 - (active ? 1 : 0.5), r.y0, active ? 2 : 1, h - r.y0);
       // Header: lighter over the gap, solid over the window, numbered.
       ctx.fillStyle = on ? COLORS.tapGap : 'rgba(180,180,173,0.35)';
@@ -293,6 +304,11 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
       let t = toT(x) - (drag.grab || 0);
       if (drag.kind === 'start') t = Math.min(t, cropEndT() - 0.01);
       if (drag.kind === 'end') t = Math.max(t, cropStartT() + 0.01);
+      if (drag.kind === 'tap'){
+        const s = e.altKey ? null : snap(t, snapRadius());
+        drag.snapped = s != null;
+        if (s != null) t = s;
+      }
       drag.time = t;
       drag.moved = true;
       redraw();
@@ -319,8 +335,8 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
     if (d.kind === 'start') onCropChange({ cropStart: round(d.time) });
     else if (d.kind === 'end') onCropChange({ cropEnd: round(Math.max(0, dur() - d.time)) });
     else {
-      const t = e.altKey ? d.time : snap(d.time);
-      onTapsChange(view.taps.map((x, i) => (i === d.index ? t : x)).sort((a, b) => a - b));
+      // Snapped straight back onto where it was: not an edit.
+      if (d.time !== view.taps[d.index]) onTapsChange(view.taps.map((x, i) => (i === d.index ? d.time : x)).sort((a, b) => a - b));
     }
     redraw();
   });
@@ -330,7 +346,8 @@ export function createTapEditor(canvas, overview, { onCropChange, onTapsChange, 
   canvas.addEventListener('dblclick', (e) => {
     if (!view || hit(eventX(e), eventY(e))) return;
     const t0 = toT(eventX(e));
-    const t = e.altKey ? t0 : snap(t0);
+    const s = e.altKey ? null : snap(t0, snapRadius());
+    const t = s != null ? s : t0;
     onTapsChange([...view.taps, t].sort((a, b) => a - b));
   });
 

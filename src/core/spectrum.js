@@ -160,24 +160,31 @@ export function computeFftMagExact(windowed, sr){
   return { freqs, mags, M };
 }
 
-// Where a tap's attack is, given a rough position: the loudest (mono-mixed)
-// sample from 10 ms before to 30 ms after `timeSec` — the same window the
-// Tap Analyser's detection uses (detect_tap_events in python/waveform_lab/tap.py).
-// Returns seconds.
-export function snapToAttack(audioBuffer, timeSec){
+// A tap attack near `timeSec`, for snapping tap markers: the loudest
+// (mono-mixed) sample within ±radiusSec — but only if it clearly stands out,
+// i.e. is at least `ratio` times the median level of the ±contextSec around
+// it. Returns its time in seconds, or null when there's nothing but
+// background (so a marker dropped in a quiet stretch stays where it was put).
+export function findAttackNear(audioBuffer, timeSec, radiusSec, { ratio = 8, contextSec = 0.25 } = {}){
   const sr = audioBuffer.sampleRate;
   const n = audioBuffer.length;
   const chans = [];
   for (let c = 0; c < audioBuffer.numberOfChannels; c++) chans.push(audioBuffer.getChannelData(c));
+  const level = (i) => { let s = 0; for (const ch of chans) s += ch[i]; return Math.abs(s / chans.length); };
+
   const p = Math.min(n - 1, Math.max(0, Math.round(timeSec * sr)));
-  const lo = Math.max(0, p - Math.round(0.01 * sr));
-  const hi = Math.min(n, p + Math.round(0.03 * sr));
-  let best = p, bestV = -Infinity;
-  for (let i = lo; i < hi; i++){
-    let sum = 0;
-    for (const ch of chans) sum += ch[i];
-    const v = Math.abs(sum / chans.length);
+  const r = Math.max(1, Math.round(radiusSec * sr));
+  let best = -1, bestV = 0;
+  for (let i = Math.max(0, p - r), hi = Math.min(n, p + r + 1); i < hi; i++){
+    const v = level(i);
     if (v > bestV){ bestV = v; best = i; }
   }
-  return best / sr;
+  if (best < 0) return null;
+
+  const a = Math.max(0, p - Math.round(contextSec * sr)), b = Math.min(n, p + Math.round(contextSec * sr) + 1);
+  const around = new Float32Array(b - a);
+  for (let i = a; i < b; i++) around[i - a] = level(i);
+  around.sort();
+  const median = around[Math.floor(around.length / 2)];
+  return bestV >= ratio * median ? best / sr : null;
 }
